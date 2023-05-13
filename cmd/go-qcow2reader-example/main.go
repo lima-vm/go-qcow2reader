@@ -66,31 +66,31 @@ func xmain() error {
 	}
 	defer f.Close()
 
-	q, err := qcow2reader.Open(f)
+	img, err := qcow2reader.Open(f)
 	if err != nil {
 		return err
 	}
 
 	if info {
-		j, err := json.MarshalIndent(q, "", "    ")
+		imgInfo := qcow2reader.NewImageInfo(img)
+		j, err := json.MarshalIndent(imgInfo, "", "    ")
 		if err != nil {
 			return err
 		}
 		if _, err = fmt.Println(string(j)); err != nil {
 			return err
 		}
-		if err = q.Readable(); err != nil {
+		if err = img.Readable(); err != nil {
 			warn(err.Error())
 		}
 		return nil
 	}
 
-	lengthI64 := int64(length)
 	if length < 0 {
-		lengthI64 = int64(q.Size)
+		length = img.Size()
 	}
 	buf := make([]byte, bufferSize)
-	sr := io.NewSectionReader(q, offset, lengthI64)
+	sr := io.NewSectionReader(img, offset, length)
 	_, err = io.CopyBuffer(os.Stdout, sr, buf)
 	return err
 }

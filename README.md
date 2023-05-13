@@ -13,7 +13,6 @@ r, _ := io.NewSectionReader(img, 0, int64(img.Size))
 ```
 
 The following features are not supported yet:
-- Backing files
 - AES
 - LUKS
 - External data

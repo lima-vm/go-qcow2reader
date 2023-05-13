@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 )
 
 // WarnFunc is called on a warning.
@@ -99,9 +100,9 @@ func (x CryptMethod) MarshalText() ([]byte, error) {
 
 type HeaderFieldsV2 struct {
 	Magic                 MagicType   `json:"magic"`
-	Version               uint32      `json:"version"` // 2 or 3
-	BackingFileOffset     uint64      `json:"backing_file_offset"`
-	BackingFileSize       uint32      `json:"backing_file_size"`
+	Version               uint32      `json:"version"`             // 2 or 3
+	BackingFileOffset     uint64      `json:"backing_file_offset"` // offset of file name (not null terminated)
+	BackingFileSize       uint32      `json:"backing_file_size"`   // length of file name (<= 1023)
 	ClusterBits           uint32      `json:"cluster_bits"`
 	Size                  uint64      `json:"size"` // Virtual disk size in bytes
 	CryptMethod           CryptMethod `json:"crypt_method"`
@@ -145,8 +146,20 @@ func activeFeaturesNames(features uint64, names []string) []string {
 	return res
 }
 
+type Features struct {
+	Raw   uint64   `json:"raw"`
+	Names []string `json:"names"`
+}
+
+func newFeatures(x uint64, names []string) *Features {
+	if x == 0 {
+		return nil
+	}
+	return &Features{Raw: x, Names: activeFeaturesNames(x, names)}
+}
+
 func (x IncompatibleFeatures) MarshalJSON() ([]byte, error) {
-	return json.Marshal(activeFeaturesNames(uint64(x), IncompatibleFeaturesNames))
+	return json.Marshal(newFeatures(uint64(x), IncompatibleFeaturesNames))
 }
 
 type CompatibleFeatures uint64
@@ -160,7 +173,7 @@ var CompatibleFeaturesNames = []string{
 }
 
 func (x CompatibleFeatures) MarshalJSON() ([]byte, error) {
-	return json.Marshal(activeFeaturesNames(uint64(x), CompatibleFeaturesNames))
+	return json.Marshal(newFeatures(uint64(x), CompatibleFeaturesNames))
 }
 
 type AutoclearFeatures uint64
@@ -176,7 +189,7 @@ var AutoclearFeaturesNames = []string{
 }
 
 func (x AutoclearFeatures) MarshalJSON() ([]byte, error) {
-	return json.Marshal(activeFeaturesNames(uint64(x), AutoclearFeaturesNames))
+	return json.Marshal(newFeatures(uint64(x), AutoclearFeaturesNames))
 }
 
 type HeaderFieldsV3 struct {
@@ -252,23 +265,20 @@ type HeaderExtension struct {
 }
 
 var (
-	ErrNotQCOW2               = errors.New("not qcow2")
+	ErrNotQcow2               = errors.New("not qcow2")
 	ErrUnsupportedBackingFile = errors.New("unsupported backing file")
 	ErrUnsupportedEncryption  = errors.New("unsupported encryption method")
-	ErrUnsupportedCompression = errors.New("unsupported encryption method")
+	ErrUnsupportedCompression = errors.New("unsupported compression type")
 	ErrUnsupportedFeature     = errors.New("unsupported feature")
 )
 
 // Readable returns nil if the image is readable, otherwise returns an error.
 func (header *Header) Readable() error {
 	if string(header.HeaderFieldsV2.Magic[:]) != Magic {
-		return ErrNotQCOW2
+		return ErrNotQcow2
 	}
 	if header.Version < 2 {
-		return ErrNotQCOW2
-	}
-	if header.BackingFileOffset != 0 {
-		return ErrUnsupportedBackingFile
+		return ErrNotQcow2
 	}
 	if header.ClusterBits < 9 {
 		return fmt.Errorf("expected cluster bits >= 9, got %d", header.ClusterBits)
@@ -303,14 +313,14 @@ func (header *Header) Readable() error {
 func readHeader(r io.Reader) (*Header, error) {
 	var header Header
 	if err := binary.Read(r, binary.BigEndian, &header.HeaderFieldsV2); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w (%v)", ErrNotQcow2, err)
 	}
 	if string(header.HeaderFieldsV2.Magic[:]) != Magic {
-		return nil, fmt.Errorf("%w (the image lacks magic %q)", ErrNotQCOW2, Magic)
+		return nil, fmt.Errorf("%w (the image lacks magic %q)", ErrNotQcow2, Magic)
 	}
 	switch header.HeaderFieldsV2.Version {
 	case 0, 1:
-		return nil, fmt.Errorf("%w (expected version >= 2, got %d)", ErrNotQCOW2, header.HeaderFieldsV2)
+		return nil, fmt.Errorf("%w (expected version >= 2, got %d)", ErrNotQcow2, header.HeaderFieldsV2)
 	case 2:
 		return &header, nil
 	}
@@ -411,19 +421,96 @@ func (desc compressedClusterDescriptor) additionalSectors(clusterBits int) int {
 	return int(uint64(desc) >> x)
 }
 
-// Image implements [io.ReaderAt].
-type Image struct {
-	ra io.ReaderAt
-	Header
+type ImageType string
+
+const (
+	ImageTypeRaw   = ImageType("raw")
+	ImageTypeQcow2 = ImageType("qcow2")
+)
+
+// Image implements [io.ReaderAt] and [io.Closer].
+type Image interface {
+	io.ReaderAt
+	io.Closer
+	Type() ImageType
+	Size() int64 // -1 if unknown
+	Readable() error
+}
+
+// ImageInfo wraps [Image] for [json.Marshal].
+type ImageInfo struct {
+	Type  ImageType `json:"type"`
+	Size  int64     `json:"size"`
+	Image `json:"image"`
+}
+
+// NewImageInfo returns image info.
+func NewImageInfo(img Image) *ImageInfo {
+	return &ImageInfo{
+		Type:  img.Type(),
+		Size:  img.Size(),
+		Image: img,
+	}
+}
+
+// Open opens an image.
+func Open(ra io.ReaderAt) (Image, error) {
+	q, err := OpenQcow2(ra)
+	if errors.Is(err, ErrNotQcow2) {
+		return OpenRaw(ra)
+	}
+	return q, err
+}
+
+// RawImage implements [Image].
+type RawImage struct {
+	io.ReaderAt `json:"-"`
+}
+
+func (img *RawImage) Close() error {
+	if closer, ok := img.ReaderAt.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+func (img *RawImage) Type() ImageType {
+	return ImageTypeRaw
+}
+
+func (img *RawImage) Size() int64 {
+	if f, ok := img.ReaderAt.(*os.File); ok {
+		if st, err := f.Stat(); err == nil {
+			return st.Size()
+		}
+	}
+	return -1
+}
+
+func (img *RawImage) Readable() error {
+	return nil
+}
+
+// OpenRaw opens a raw image.
+func OpenRaw(ra io.ReaderAt) (*RawImage, error) {
+	return &RawImage{ReaderAt: ra}, nil
+}
+
+// Qcow2Image implements [Image].
+type Qcow2Image struct {
+	ra            io.ReaderAt
+	Header        `json:"header"`
 	errUnreadable error
 	clusterSize   int
 	l1Table       []l1TableEntry
 	decompressor  Decompressor
+	BackingFile   string `json:"backing_file"`
+	backingImage  Image
 }
 
-// Open opens an image.
-func Open(ra io.ReaderAt) (*Image, error) {
-	img := &Image{
+// OpenQcow2 opens an qcow2 image.
+func OpenQcow2(ra io.ReaderAt) (*Qcow2Image, error) {
+	img := &Qcow2Image{
 		ra: ra,
 	}
 	r := io.NewSectionReader(ra, 0, -1)
@@ -445,14 +532,66 @@ func Open(ra io.ReaderAt) (*Image, error) {
 		}
 		img.decompressor = decompressors[compressionType]
 		if img.decompressor == nil {
-			return img, fmt.Errorf("%w (no decompressor is registered for compression type %v)", ErrUnsupportedCompression, compressionType)
+			img.errUnreadable = fmt.Errorf("%w (no decompressor is registered for compression type %v)", ErrUnsupportedCompression, compressionType)
+			return img, nil
+		}
+		if header.BackingFileOffset != 0 {
+			if header.BackingFileSize > 1023 {
+				img.errUnreadable = fmt.Errorf("expected backing file offset <= 1023, got %d", header.BackingFileSize)
+				return img, nil
+			}
+			backingFileNameB := make([]byte, header.BackingFileSize)
+			if _, err = ra.ReadAt(backingFileNameB, int64(header.BackingFileOffset)); err != nil {
+				img.errUnreadable = fmt.Errorf("failed to read backing file name: %w", err)
+				return img, nil
+			}
+			img.BackingFile = string(backingFileNameB)
+			backingFile, err := os.Open(img.BackingFile)
+			if err != nil {
+				img.errUnreadable = fmt.Errorf("%w (file %q): %v", ErrUnsupportedBackingFile, img.BackingFile, err)
+				return img, nil
+			}
+			img.backingImage, err = Open(backingFile)
+			if err != nil {
+				img.errUnreadable = fmt.Errorf("%w (file %q): %v", ErrUnsupportedBackingFile, img.BackingFile, err)
+				_ = img.backingImage.Close()
+				return img, nil
+			}
 		}
 	}
 	return img, nil
 }
 
-// readAtAligned requires that off and off+len(p)-1 belong the same cluster.
-func (img *Image) readAtAligned(p []byte, off int64) (int, error) {
+func (img *Qcow2Image) Close() error {
+	var err error
+	if img.backingImage != nil {
+		err = img.backingImage.Close()
+	}
+	if closer, ok := img.ra.(io.Closer); ok {
+		if err2 := closer.Close(); err2 != nil {
+			if err != nil {
+				Warn(err)
+			}
+			err = err2
+		}
+	}
+	return err
+}
+
+func (img *Qcow2Image) Type() ImageType {
+	return ImageTypeQcow2
+}
+
+func (img *Qcow2Image) Size() int64 {
+	return int64(img.Header.Size)
+}
+
+func (img *Qcow2Image) Readable() error {
+	return img.errUnreadable
+}
+
+// readAtAligned requires that off and off+len(p)-1 belong to the same cluster.
+func (img *Qcow2Image) readAtAligned(p []byte, off int64) (int, error) {
 	l2Entries := img.clusterSize / 8
 	l1Index := int((off / int64(img.clusterSize)) / int64(l2Entries))
 	if l1Index >= len(img.l1Table) {
@@ -461,8 +600,7 @@ func (img *Image) readAtAligned(p []byte, off int64) (int, error) {
 	l1Entry := img.l1Table[l1Index]
 	l2TableOffset := l1Entry.l2Offset()
 	if l2TableOffset == 0 {
-		// unallocated
-		return img.readZero(p, off)
+		return img.readAtAlignedUnallocated(p, off)
 	}
 	l2Table, err := readL2Table(img.ra, l2TableOffset, img.clusterSize)
 	if err != nil {
@@ -473,11 +611,10 @@ func (img *Image) readAtAligned(p []byte, off int64) (int, error) {
 		return 0, fmt.Errorf("index %d exceeds the L2 table length %d", l2Index, l2Table)
 	}
 	l2Entry := l2Table[l2Index]
-	if l2Entry == 0 {
-		// unallocated
-		return img.readZero(p, off)
-	}
 	desc := l2Entry.clusterDescriptor()
+	if desc == 0 {
+		return img.readAtAlignedUnallocated(p, off)
+	}
 	var n int
 	if l2Entry.compressed() {
 		compressedDesc := compressedClusterDescriptor(desc)
@@ -495,8 +632,32 @@ func (img *Image) readAtAligned(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-func (img *Image) readAtAlignedStandard(p []byte, off int64, desc standardClusterDescriptor) (int, error) {
-	if desc == 0 || desc.allZero() {
+func (img *Qcow2Image) readAtAlignedUnallocated(p []byte, off int64) (int, error) {
+	if img.backingImage == nil {
+		return img.readZero(p, off)
+	}
+	n, err := img.backingImage.ReadAt(p, off)
+	var consumed int
+	if n > 0 {
+		consumed += n
+	}
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	if remaining := len(p) - n; remaining > 0 {
+		readZeroN, readZeroErr := img.readZero(p[consumed:consumed+remaining], off+int64(consumed))
+		if readZeroN > 0 {
+			consumed += readZeroN
+		}
+		if err == nil && readZeroErr != nil {
+			err = readZeroErr
+		}
+	}
+	return consumed, err
+}
+
+func (img *Qcow2Image) readAtAlignedStandard(p []byte, off int64, desc standardClusterDescriptor) (int, error) {
+	if desc.allZero() {
 		return img.readZero(p, off)
 	}
 	hostClusterOffset := desc.hostClusterOffset()
@@ -511,7 +672,7 @@ func (img *Image) readAtAlignedStandard(p []byte, off int64, desc standardCluste
 	return n, err
 }
 
-func (img *Image) readAtAlignedCompressed(p []byte, off int64, desc compressedClusterDescriptor) (int, error) {
+func (img *Qcow2Image) readAtAlignedCompressed(p []byte, off int64, desc compressedClusterDescriptor) (int, error) {
 	hostClusterOffset := desc.hostClusterOffset(int(img.Header.ClusterBits))
 	if hostClusterOffset == 0 {
 		return 0, fmt.Errorf("invalid host cluster offset 0 for virtual offset %d", off)
@@ -529,7 +690,7 @@ func (img *Image) readAtAlignedCompressed(p []byte, off int64, desc compressedCl
 	return zr.Read(p)
 }
 
-func (img *Image) readZero(p []byte, off int64) (int, error) {
+func (img *Qcow2Image) readZero(p []byte, off int64) (int, error) {
 	return readZero(p, off, img.Header.Size)
 }
 
@@ -550,13 +711,7 @@ func readZero(p []byte, off int64, sz uint64) (int, error) {
 }
 
 // ReadAt implements [io.ReaderAt].
-func (img *Image) ReadAt(p []byte, off int64) (n int, err error) {
-	debugf := func(format string, a ...any) {
-		// Debugf("ReadAt(len(p=%d), off=%d): %s", len(p), off, fmt.Sprintf(format, a...))
-	}
-	defer func() {
-		debugf("returning n=%d, err=%v", n, err)
-	}()
+func (img *Qcow2Image) ReadAt(p []byte, off int64) (n int, err error) {
 	if img.errUnreadable != nil {
 		err = img.errUnreadable
 		return
@@ -587,14 +742,10 @@ func (img *Image) ReadAt(p []byte, off int64) (n int, err error) {
 		}
 		var currentN int
 		currentN, err = img.readAtAligned(p[pIndexBegin:pIndexEnd], currentOff)
-		debugf("n=%d, remaining=%d: currentOff=%d, pIndexBegin=%d, pIndexEnd=%d, clusterBegin=%d: currentN=%d, err=%v",
-			n, remaining, currentOff, pIndexBegin, pIndexEnd, clusterBegin, currentN, err)
 		if currentN == 0 && err == nil {
-			debugf("unexpected EOF? (currentN=%d)", currentN)
 			err = io.EOF
 		}
 		if currentN > 0 {
-			debugf("n=%d->%d, remaining=%d->%d", n, n+currentN, remaining, remaining-currentN)
 			n += currentN
 			remaining -= currentN
 		}

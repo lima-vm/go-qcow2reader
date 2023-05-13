@@ -41,6 +41,8 @@ if [ "${expected}" = "${got}" ]; then
 	echo "OK"
 else
 	echo "FAIL"
+	set -x
+	qemu-img compare "${name_raw_a}" "${name_raw_b}"
 	exit 1
 fi
 

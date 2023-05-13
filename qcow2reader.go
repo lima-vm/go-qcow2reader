@@ -255,7 +255,7 @@ var (
 	ErrNotQCOW2               = errors.New("not qcow2")
 	ErrUnsupportedBackingFile = errors.New("unsupported backing file")
 	ErrUnsupportedEncryption  = errors.New("unsupported encryption method")
-	ErrUnsupportedCompression = errors.New("unsupported encryption method")
+	ErrUnsupportedCompression = errors.New("unsupported compression type")
 	ErrUnsupportedFeature     = errors.New("unsupported feature")
 )
 
@@ -451,7 +451,7 @@ func Open(ra io.ReaderAt) (*Image, error) {
 	return img, nil
 }
 
-// readAtAligned requires that off and off+len(p)-1 belong the same cluster.
+// readAtAligned requires that off and off+len(p)-1 belong to the same cluster.
 func (img *Image) readAtAligned(p []byte, off int64) (int, error) {
 	l2Entries := img.clusterSize / 8
 	l1Index := int((off / int64(img.clusterSize)) / int64(l2Entries))
@@ -551,12 +551,6 @@ func readZero(p []byte, off int64, sz uint64) (int, error) {
 
 // ReadAt implements [io.ReaderAt].
 func (img *Image) ReadAt(p []byte, off int64) (n int, err error) {
-	debugf := func(format string, a ...any) {
-		// Debugf("ReadAt(len(p=%d), off=%d): %s", len(p), off, fmt.Sprintf(format, a...))
-	}
-	defer func() {
-		debugf("returning n=%d, err=%v", n, err)
-	}()
 	if img.errUnreadable != nil {
 		err = img.errUnreadable
 		return
@@ -587,14 +581,10 @@ func (img *Image) ReadAt(p []byte, off int64) (n int, err error) {
 		}
 		var currentN int
 		currentN, err = img.readAtAligned(p[pIndexBegin:pIndexEnd], currentOff)
-		debugf("n=%d, remaining=%d: currentOff=%d, pIndexBegin=%d, pIndexEnd=%d, clusterBegin=%d: currentN=%d, err=%v",
-			n, remaining, currentOff, pIndexBegin, pIndexEnd, clusterBegin, currentN, err)
 		if currentN == 0 && err == nil {
-			debugf("unexpected EOF? (currentN=%d)", currentN)
 			err = io.EOF
 		}
 		if currentN > 0 {
-			debugf("n=%d->%d, remaining=%d->%d", n, n+currentN, remaining, remaining-currentN)
 			n += currentN
 			remaining -= currentN
 		}

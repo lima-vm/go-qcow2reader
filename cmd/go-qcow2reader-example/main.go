@@ -9,6 +9,8 @@ import (
 	"os"
 
 	"github.com/lima-vm/go-qcow2reader"
+	"github.com/lima-vm/go-qcow2reader/image"
+	"github.com/lima-vm/go-qcow2reader/log"
 )
 
 func warn(s string) {
@@ -20,7 +22,7 @@ func debugPrint(s string) {
 }
 
 func main() {
-	qcow2reader.SetWarnFunc(warn)
+	log.SetWarnFunc(warn)
 	if err := xmain(); err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR: "+err.Error())
 		os.Exit(1)
@@ -46,7 +48,7 @@ func xmain() error {
 	flag.Int64Var(&length, "length", -1, "length to read")
 	flag.Parse()
 	if debug {
-		qcow2reader.SetDebugPrintFunc(debugPrint)
+		log.SetDebugFunc(debugPrint)
 	}
 
 	args := flag.Args()
@@ -72,7 +74,7 @@ func xmain() error {
 	}
 
 	if info {
-		imgInfo := qcow2reader.NewImageInfo(img)
+		imgInfo := image.NewImageInfo(img)
 		j, err := json.MarshalIndent(imgInfo, "", "    ")
 		if err != nil {
 			return err

@@ -145,8 +145,20 @@ func activeFeaturesNames(features uint64, names []string) []string {
 	return res
 }
 
+type Features struct {
+	Raw   uint64   `json:"raw"`
+	Names []string `json:"names"`
+}
+
+func newFeatures(x uint64, names []string) *Features {
+	if x == 0 {
+		return nil
+	}
+	return &Features{Raw: x, Names: activeFeaturesNames(x, names)}
+}
+
 func (x IncompatibleFeatures) MarshalJSON() ([]byte, error) {
-	return json.Marshal(activeFeaturesNames(uint64(x), IncompatibleFeaturesNames))
+	return json.Marshal(newFeatures(uint64(x), IncompatibleFeaturesNames))
 }
 
 type CompatibleFeatures uint64
@@ -160,7 +172,7 @@ var CompatibleFeaturesNames = []string{
 }
 
 func (x CompatibleFeatures) MarshalJSON() ([]byte, error) {
-	return json.Marshal(activeFeaturesNames(uint64(x), CompatibleFeaturesNames))
+	return json.Marshal(newFeatures(uint64(x), CompatibleFeaturesNames))
 }
 
 type AutoclearFeatures uint64
@@ -176,7 +188,7 @@ var AutoclearFeaturesNames = []string{
 }
 
 func (x AutoclearFeatures) MarshalJSON() ([]byte, error) {
-	return json.Marshal(activeFeaturesNames(uint64(x), AutoclearFeaturesNames))
+	return json.Marshal(newFeatures(uint64(x), AutoclearFeaturesNames))
 }
 
 type HeaderFieldsV3 struct {

@@ -321,8 +321,9 @@ func (header *Header) Readable() error {
 				switch i {
 				case IncompatibleFeaturesDirtyBit, IncompatibleFeaturesCorruptBit:
 					log.Warnf("unexpected incompatible feature bit: %q", IncompatibleFeaturesNames[i])
+				case IncompatibleFeaturesCompressionTypeBit:
+					// NOP
 				case IncompatibleFeaturesExternalDataFileBit,
-					IncompatibleFeaturesCompressionTypeBit,
 					IncompatibleFeaturesExtendedL2EntriesBit:
 					return fmt.Errorf("%w: incompatible feature: %q", ErrUnsupportedFeature, IncompatibleFeaturesNames[i])
 				default:

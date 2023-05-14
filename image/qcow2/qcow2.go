@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/lima-vm/go-qcow2reader/align"
 	"github.com/lima-vm/go-qcow2reader/image"
@@ -512,19 +513,23 @@ func (desc compressedClusterDescriptor) additionalSectors(clusterBits int) int {
 
 // Qcow2 implements [image.Image].
 type Qcow2 struct {
-	ra                io.ReaderAt
-	*Header           `json:"header"`
-	HeaderExtensions  []HeaderExtension `json:"header_extensions"`
-	errUnreadable     error
-	clusterSize       int
-	l1Table           []l1TableEntry
-	decompressor      Decompressor
-	BackingFile       string     `json:"backing_file"`
-	BackingFileFormat image.Type `json:"backing_file_format"`
-	backingImage      image.Image
+	ra                  io.ReaderAt
+	*Header             `json:"header"`
+	HeaderExtensions    []HeaderExtension `json:"header_extensions"`
+	errUnreadable       error
+	clusterSize         int
+	l1Table             []l1TableEntry
+	decompressor        Decompressor
+	BackingFile         string     `json:"backing_file"`
+	BackingFileFullPath string     `json:"backing_file_full_path"`
+	BackingFileFormat   image.Type `json:"backing_file_format"`
+	backingImage        image.Image
 }
 
 // Open opens an qcow2 image.
+//
+// To open an image with backing files, ra must implement [Namer],
+// and openWithType must be non-nil.
 func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 	img := &Qcow2{
 		ra: ra,
@@ -586,20 +591,44 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 				return img, nil
 			}
 			img.BackingFile = string(backingFileNameB)
-			backingFile, err := os.Open(img.BackingFile)
+			img.BackingFileFullPath, err = resolveBackingFilePath(ra, img.BackingFile)
 			if err != nil {
-				img.errUnreadable = fmt.Errorf("%w (file %q): %v", ErrUnsupportedBackingFile, img.BackingFile, err)
+				img.errUnreadable = fmt.Errorf("%w: failed to resolve the path of %q: %v", ErrUnsupportedBackingFile, img.BackingFile, err)
+				return img, nil
+			}
+			backingFile, err := os.Open(img.BackingFileFullPath)
+			if err != nil {
+				img.errUnreadable = fmt.Errorf("%w (file %q): %v", ErrUnsupportedBackingFile, img.BackingFileFullPath, err)
 				return img, nil
 			}
 			img.backingImage, err = openWithType(backingFile, img.BackingFileFormat)
 			if err != nil {
-				img.errUnreadable = fmt.Errorf("%w (file %q, format %q): %v", ErrUnsupportedBackingFile, img.BackingFile, img.BackingFileFormat, err)
+				img.errUnreadable = fmt.Errorf("%w (file %q, format %q): %v", ErrUnsupportedBackingFile, img.BackingFileFullPath, img.BackingFileFormat, err)
 				_ = img.backingImage.Close()
 				return img, nil
 			}
 		}
 	}
 	return img, nil
+}
+
+// Namer is implemented by [os.File].
+type Namer interface {
+	Name() string
+}
+
+func resolveBackingFilePath(ra io.ReaderAt, s string) (string, error) {
+	if filepath.IsAbs(s) {
+		return s, nil
+	}
+	raAsNamer, ok := ra.(Namer)
+	if !ok {
+		return "", fmt.Errorf("file %T does not have Name() string", ra)
+	}
+	dir := filepath.Dir(raAsNamer.Name())
+	// s can be "../../..." (allowed by qemu)
+	joined := filepath.Join(dir, s)
+	return filepath.Abs(joined)
 }
 
 func (img *Qcow2) Close() error {

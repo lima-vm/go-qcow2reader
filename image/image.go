@@ -15,7 +15,7 @@ type Image interface {
 	Readable() error
 }
 
-type Opener func(ra io.ReaderAt) (Image, error)
+type Opener func(io.ReaderAt, Type) (Image, error)
 
 // ImageInfo wraps [Image] for [json.Marshal].
 type ImageInfo struct {

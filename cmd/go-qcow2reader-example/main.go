@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/lima-vm/go-qcow2reader"
 	"github.com/lima-vm/go-qcow2reader/image"
+	"github.com/lima-vm/go-qcow2reader/image/qcow2"
 	"github.com/lima-vm/go-qcow2reader/log"
 )
 
@@ -21,8 +23,29 @@ func debugPrint(s string) {
 	fmt.Fprintln(os.Stderr, "DEBUG: "+s)
 }
 
+type zstdDecompressor struct {
+	*zstd.Decoder
+}
+
+func (x *zstdDecompressor) Close() error {
+	x.Decoder.Close()
+	return nil
+}
+
+func newZstdDecompressor(r io.Reader) (io.ReadCloser, error) {
+	dec, err := zstd.NewReader(r)
+	if err != nil {
+		return nil, err
+	}
+	return &zstdDecompressor{dec}, nil
+}
+
 func main() {
 	log.SetWarnFunc(warn)
+
+	// zlib (deflate) decompressor is registered by default, but zstd is not.
+	qcow2.SetDecompressor(qcow2.CompressionTypeZstd, newZstdDecompressor)
+
 	if err := xmain(); err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR: "+err.Error())
 		os.Exit(1)

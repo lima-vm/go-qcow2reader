@@ -23,7 +23,7 @@ jobs:
       - name: Unit tests
         run: go test -v ./...
       - name: Install go-qcow2reader-example
-        run: go install ./cmd/go-qcow2reader-example
+        run: cd ./cmd/go-qcow2reader-example && go install
       - name: Install qemu-img as a test dependency
         run: |
           sudo apt-get update
@@ -45,9 +45,13 @@ jobs:
           # Create a child image, with a custom size
           qemu-img create -f qcow2 -b debian-11-genericcloud-amd64-20230501-1367.qcow2 -F qcow2 debian-11-genericcloud-amd64-20230501-1367.child_4G.qcow2 4G
           # TODO: write something to the child image (with qemu-nbd?)
+          # Convert to zstd
+          qemu-img convert -f qcow2 -O qcow2 -o compression_type=zstd debian-11-genericcloud-amd64-20230501-1367.qcow2 debian-11-genericcloud-amd64-20230501-1367.zstd.qcow2
       - name: Prepare test-images
         run: cp -a test-images-ro test-images
       - name: "Test debian-11-genericcloud-amd64-20230501-1367.qcow2"
         run: hack/compare-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.qcow2
       - name: "Test debian-11-genericcloud-amd64-20230501-1367.child_4G.qcow2 (child image, with a custom size)"
         run: hack/compare-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.child_4G.qcow2
+      - name: "Test debian-11-genericcloud-amd64-20230501-1367.zstd.qcow2"
+        run: hack/compare-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.zstd.qcow2

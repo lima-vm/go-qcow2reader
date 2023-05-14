@@ -1,6 +1,7 @@
 package qcow2
 
 import (
+	"bytes"
 	"compress/flate"
 	"encoding/binary"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/lima-vm/go-qcow2reader/align"
 	"github.com/lima-vm/go-qcow2reader/image"
 	"github.com/lima-vm/go-qcow2reader/log"
 )
@@ -206,6 +208,13 @@ type Header struct {
 	*HeaderFieldsAdditional
 }
 
+func (header *Header) Length() int {
+	if header.HeaderFieldsV3 != nil {
+		return int(header.HeaderFieldsV3.HeaderLength)
+	}
+	return 72
+}
+
 type HeaderExtensionType uint32
 
 const (
@@ -217,9 +226,71 @@ const (
 	HeaderExtensionTypeExternalDataFileNameString      = HeaderExtensionType(0x44415441)
 )
 
+func (x HeaderExtensionType) String() string {
+	switch x {
+	case HeaderExtensionTypeEnd:
+		return "End of the header extension area"
+	case HeaderExtensionTypeBackingFileFormatNameString:
+		return "Backing file format name string"
+	case HeaderExtensionTypeFeatureNameTable:
+		return "Feature name table"
+	case HeaderExtensionTypeBitmapsExtension:
+		return "Bitmaps extension"
+	case HeaderExtensionTypeFullDiskEncryptionHeaderPointer:
+		return "Full disk encryption header pointer"
+	case HeaderExtensionTypeExternalDataFileNameString:
+		return "External data file name string"
+	default:
+		return fmt.Sprintf("unknown-0x%08x", int(x))
+	}
+}
+
+func (x HeaderExtensionType) MarshalText() ([]byte, error) {
+	return []byte(x.String()), nil
+}
+
 type HeaderExtension struct {
 	Type   HeaderExtensionType `json:"type"`
 	Length uint32              `json:"length"`
+	Data   interface{}         `json:"data,omitempty"`
+}
+
+type FeatureNameTableEntryType uint8
+
+const (
+	FeatureNameTableEntryTypeIncompatible = FeatureNameTableEntryType(0)
+	FeatureNameTableEntryTypeCompatible   = FeatureNameTableEntryType(1)
+	FeatureNameTableEntryTypeAutoclear    = FeatureNameTableEntryType(2)
+)
+
+func (x FeatureNameTableEntryType) String() string {
+	switch x {
+	case FeatureNameTableEntryTypeIncompatible:
+		return "incompatible"
+	case FeatureNameTableEntryTypeCompatible:
+		return "compatible"
+	case FeatureNameTableEntryTypeAutoclear:
+		return "autoclear"
+	default:
+		return fmt.Sprintf("unknown-%d", int(x))
+	}
+}
+
+func (x FeatureNameTableEntryType) MarshalText() ([]byte, error) {
+	return []byte(x.String()), nil
+}
+
+type FeatureName [46]byte
+
+type FeatureNameTableEntry struct {
+	Type FeatureNameTableEntryType `json:"type"`
+	Bit  uint8                     `json:"bit"`
+	Name string                    `json:"name"`
+}
+
+type OffsetLengthPair64 struct {
+	Offset uint64 `json:"offset"`
+	Length uint64 `json:"length"`
 }
 
 var (
@@ -250,8 +321,9 @@ func (header *Header) Readable() error {
 				switch i {
 				case IncompatibleFeaturesDirtyBit, IncompatibleFeaturesCorruptBit:
 					log.Warnf("unexpected incompatible feature bit: %q", IncompatibleFeaturesNames[i])
+				case IncompatibleFeaturesCompressionTypeBit:
+					// NOP
 				case IncompatibleFeaturesExternalDataFileBit,
-					IncompatibleFeaturesCompressionTypeBit,
 					IncompatibleFeaturesExtendedL2EntriesBit:
 					return fmt.Errorf("%w: incompatible feature: %q", ErrUnsupportedFeature, IncompatibleFeaturesNames[i])
 				default:
@@ -297,6 +369,65 @@ func readHeader(r io.Reader) (*Header, error) {
 	}
 	header.HeaderFieldsAdditional = &additional
 	return &header, nil
+}
+
+func readHeaderExtensions(ra io.ReaderAt, header *Header) ([]HeaderExtension, error) {
+	var res []HeaderExtension
+	r := io.NewSectionReader(ra, int64(header.Length()), -1)
+loop:
+	for {
+		var ext HeaderExtension
+		if err := binary.Read(r, binary.BigEndian, &ext.Type); err != nil {
+			return res, err
+		}
+		if err := binary.Read(r, binary.BigEndian, &ext.Length); err != nil {
+			return res, err
+		}
+		if ext.Length > 4096 {
+			log.Warnf("Ignoring header extension %q: too long (%d bytes > 4096 bytes)", ext.Type, ext.Length)
+		} else {
+			bufLen := align.Up(int(ext.Length), 8)
+			buf := make([]byte, bufLen)
+			if _, err := r.Read(buf); err != nil {
+				return res, err
+			}
+			data := buf[:ext.Length]
+			switch ext.Type {
+			case HeaderExtensionTypeEnd:
+				break loop
+			case HeaderExtensionTypeBackingFileFormatNameString,
+				HeaderExtensionTypeExternalDataFileNameString:
+				ext.Data = string(data)
+			case HeaderExtensionTypeFeatureNameTable:
+				names := int(ext.Length) / 48
+				var nameTable []FeatureNameTableEntry
+				for i := 0; i < names; i++ {
+					ent := FeatureNameTableEntry{
+						Type: FeatureNameTableEntryType(data[(i * 48)]),
+						Bit:  uint8(data[(i*48)+1]),
+						Name: string(bytes.Trim(data[(i*48)+2:(i*48)+48], "\x00")),
+					}
+					nameTable = append(nameTable, ent)
+				}
+				ext.Data = nameTable
+			case HeaderExtensionTypeFullDiskEncryptionHeaderPointer:
+				var ptr OffsetLengthPair64
+				if err := binary.Read(bytes.NewReader(data), binary.BigEndian, &ptr); err != nil {
+					return res, err
+				}
+				ext.Data = &ptr
+			case HeaderExtensionTypeBitmapsExtension:
+				// NOP
+			default:
+				ext.Data = data
+			}
+		}
+		res = append(res, ext)
+		if len(res) > 256 {
+			return res, fmt.Errorf("too many header extensions (%d entries)", len(res))
+		}
+	}
+	return res, nil
 }
 
 type l1TableEntry uint64
@@ -381,14 +512,16 @@ func (desc compressedClusterDescriptor) additionalSectors(clusterBits int) int {
 
 // Qcow2 implements [image.Image].
 type Qcow2 struct {
-	ra            io.ReaderAt
-	Header        `json:"header"`
-	errUnreadable error
-	clusterSize   int
-	l1Table       []l1TableEntry
-	decompressor  Decompressor
-	BackingFile   string `json:"backing_file"`
-	backingImage  image.Image
+	ra                io.ReaderAt
+	*Header           `json:"header"`
+	HeaderExtensions  []HeaderExtension `json:"header_extensions"`
+	errUnreadable     error
+	clusterSize       int
+	l1Table           []l1TableEntry
+	decompressor      Decompressor
+	BackingFile       string     `json:"backing_file"`
+	BackingFileFormat image.Type `json:"backing_file_format"`
+	backingImage      image.Image
 }
 
 // Open opens an qcow2 image.
@@ -397,34 +530,58 @@ func Open(ra io.ReaderAt, openGeneric image.Opener) (*Qcow2, error) {
 		ra: ra,
 	}
 	r := io.NewSectionReader(ra, 0, -1)
-	header, err := readHeader(r)
+	var err error
+	img.Header, err = readHeader(r)
 	if err != nil {
 		return nil, fmt.Errorf("faild to read header: %w", err)
 	}
-	img.Header = *header
-	img.errUnreadable = header.Readable() // cache
+	img.errUnreadable = img.Header.Readable() // cache
 	if img.errUnreadable == nil {
-		img.clusterSize = 1 << header.ClusterBits
-		img.l1Table, err = readL1Table(ra, header.L1TableOffset, header.L1Size)
+		// Load cluster size
+		img.clusterSize = 1 << img.Header.ClusterBits
+
+		// Load header extensions
+		img.HeaderExtensions, err = readHeaderExtensions(ra, img.Header)
+		if err != nil {
+			log.Warnf("Failed to read header extensions: %v", err)
+		}
+		for _, ext := range img.HeaderExtensions {
+			switch ext.Type {
+			case HeaderExtensionTypeBackingFileFormatNameString:
+				backingFileFormat, ok := ext.Data.(string)
+				if !ok {
+					log.Warnf("Unexpected header extension %v", ext)
+					break
+				}
+				img.BackingFileFormat = image.Type(backingFileFormat)
+			}
+		}
+
+		// Load L1 table
+		img.l1Table, err = readL1Table(ra, img.Header.L1TableOffset, img.Header.L1Size)
 		if err != nil {
 			return img, fmt.Errorf("faild to read L1 table: %w", err)
 		}
+
+		// Load decompressor
 		var compressionType CompressionType
-		if header.HeaderFieldsAdditional != nil {
-			compressionType = header.HeaderFieldsAdditional.CompressionType
+		if img.Header.HeaderFieldsAdditional != nil {
+			compressionType = img.Header.HeaderFieldsAdditional.CompressionType
 		}
 		img.decompressor = decompressors[compressionType]
 		if img.decompressor == nil {
 			img.errUnreadable = fmt.Errorf("%w (no decompressor is registered for compression type %v)", ErrUnsupportedCompression, compressionType)
 			return img, nil
 		}
-		if header.BackingFileOffset != 0 {
-			if header.BackingFileSize > 1023 {
-				img.errUnreadable = fmt.Errorf("expected backing file offset <= 1023, got %d", header.BackingFileSize)
+
+		// Load backing file
+		if img.Header.BackingFileOffset != 0 {
+			if img.Header.BackingFileSize > 1023 {
+				img.errUnreadable = fmt.Errorf("expected backing file offset <= 1023, got %d", img.Header.BackingFileSize)
 				return img, nil
 			}
-			backingFileNameB := make([]byte, header.BackingFileSize)
-			if _, err = ra.ReadAt(backingFileNameB, int64(header.BackingFileOffset)); err != nil {
+			backingFileNameB := make([]byte, img.Header.BackingFileSize)
+			if _, err = ra.ReadAt(backingFileNameB, int64(img.Header.BackingFileOffset)); err != nil {
 				img.errUnreadable = fmt.Errorf("failed to read backing file name: %w", err)
 				return img, nil
 			}
@@ -434,9 +591,9 @@ func Open(ra io.ReaderAt, openGeneric image.Opener) (*Qcow2, error) {
 				img.errUnreadable = fmt.Errorf("%w (file %q): %v", ErrUnsupportedBackingFile, img.BackingFile, err)
 				return img, nil
 			}
-			img.backingImage, err = openGeneric(backingFile)
+			img.backingImage, err = openGeneric(backingFile, img.BackingFileFormat)
 			if err != nil {
-				img.errUnreadable = fmt.Errorf("%w (file %q): %v", ErrUnsupportedBackingFile, img.BackingFile, err)
+				img.errUnreadable = fmt.Errorf("%w (file %q, format %q): %v", ErrUnsupportedBackingFile, img.BackingFile, img.BackingFileFormat, err)
 				_ = img.backingImage.Close()
 				return img, nil
 			}

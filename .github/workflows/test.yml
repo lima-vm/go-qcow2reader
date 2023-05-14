@@ -1,0 +1,51 @@
+name: test
+on:
+  push:
+  pull_request:
+jobs:
+  integration:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-go@v4
+        with:
+          go-version: 1.20.x
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v3.4.0
+        with:
+          version: v1.52.2
+          args: --verbose
+      - name: Unit tests
+        run: go test -v ./...
+      - name: Install go-qcow2reader-example
+        run: go install ./cmd/go-qcow2reader-example
+      - name: Install qemu-img as a test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils
+      - name: Cache test-images-ro
+        id: cache-test-images-ro
+        uses: actions/cache@v3
+        with:
+          path: test-images-ro
+          key: ${{ runner.os }}-integration
+      - name: Prepare test-images-ro
+        if: steps.cache-test-images-ro.outputs.cache-hit != 'true'
+        run: |
+          set -eux -o pipefail
+          mkdir -p test-images-ro
+          cd test-images-ro
+          # version: 3, virtual size: 2GiB, cluster size: 16 bits (65536 bytes)
+          curl -SL -O https://cloud.debian.org/images/cloud/bullseye/20230501-1367/debian-11-genericcloud-amd64-20230501-1367.qcow2
+          # Create a child image, with a custom size
+          qemu-img create -f qcow2 -b debian-11-genericcloud-amd64-20230501-1367.qcow2 -F qcow2 debian-11-genericcloud-amd64-20230501-1367.child_4G.qcow2 4G
+          # TODO: write something to the child image (with qemu-nbd?)
+      - name: Prepare test-images
+        run: cp -a test-images-ro test-images
+      - name: "Test debian-11-genericcloud-amd64-20230501-1367.qcow2"
+        run: hack/compare-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.qcow2
+      - name: "Test debian-11-genericcloud-amd64-20230501-1367.child_4G.qcow2 (child image, with a custom size)"
+        run: hack/compare-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.child_4G.qcow2

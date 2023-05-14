@@ -184,10 +184,13 @@ func (x CompressionType) MarshalText() ([]byte, error) {
 	return []byte(x.String()), nil
 }
 
-type Decompressor func(r io.Reader) io.ReadCloser
+type Decompressor func(r io.Reader) (io.ReadCloser, error)
 
 var decompressors = map[CompressionType]Decompressor{
-	CompressionTypeZlib: flate.NewReader, // no zlib header
+	// no zlib header
+	CompressionTypeZlib: func(r io.Reader) (io.ReadCloser, error) {
+		return flate.NewReader(r), nil
+	},
 }
 
 // SetDecompressor sets a custom decompressor.
@@ -749,7 +752,10 @@ func (img *Qcow2) readAtAlignedCompressed(p []byte, off int64, desc compressedCl
 	additionalSectors := desc.additionalSectors(int(img.Header.ClusterBits))
 	compressedSize := img.clusterSize + 512*additionalSectors
 	compressedSR := io.NewSectionReader(img.ra, int64(hostClusterOffset), int64(compressedSize))
-	zr := img.decompressor(compressedSR)
+	zr, err := img.decompressor(compressedSR)
+	if err != nil {
+		return 0, fmt.Errorf("could not open the decompressor: %w", err)
+	}
 	defer zr.Close()
 	if discard := off % int64(img.clusterSize); discard != 0 {
 		if _, err := io.CopyN(io.Discard, zr, discard); err != nil {

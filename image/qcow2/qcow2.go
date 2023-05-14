@@ -294,7 +294,7 @@ type OffsetLengthPair64 struct {
 }
 
 var (
-	ErrNotQcow2               = errors.New("not qcow2")
+	ErrNotQcow2               = fmt.Errorf("%w: image is not qcow2", image.ErrWrongType)
 	ErrUnsupportedBackingFile = errors.New("unsupported backing file")
 	ErrUnsupportedEncryption  = errors.New("unsupported encryption method")
 	ErrUnsupportedCompression = errors.New("unsupported compression type")
@@ -525,7 +525,7 @@ type Qcow2 struct {
 }
 
 // Open opens an qcow2 image.
-func Open(ra io.ReaderAt, openGeneric image.Opener) (*Qcow2, error) {
+func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 	img := &Qcow2{
 		ra: ra,
 	}
@@ -591,7 +591,7 @@ func Open(ra io.ReaderAt, openGeneric image.Opener) (*Qcow2, error) {
 				img.errUnreadable = fmt.Errorf("%w (file %q): %v", ErrUnsupportedBackingFile, img.BackingFile, err)
 				return img, nil
 			}
-			img.backingImage, err = openGeneric(backingFile, img.BackingFileFormat)
+			img.backingImage, err = openWithType(backingFile, img.BackingFileFormat)
 			if err != nil {
 				img.errUnreadable = fmt.Errorf("%w (file %q, format %q): %v", ErrUnsupportedBackingFile, img.BackingFile, img.BackingFileFormat, err)
 				_ = img.backingImage.Close()

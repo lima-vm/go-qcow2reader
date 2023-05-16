@@ -9,11 +9,13 @@ Use [`io.NewSectionReader`](https://pkg.go.dev/io#NewSectionReader) to wrap [`io
 f, _ := os.Open("a.qcow2")
 defer f.Close()
 img, _ := qcow2reader.Open(f)
-r, _ := io.NewSectionReader(img, 0, int64(img.Size))
+r, _ := io.NewSectionReader(img, 0, img.Size()))
 ```
 
 The following features are not supported yet:
-- AES
-- LUKS
-- External data
-- Extended L2 Entries
+- [AES](https://gitlab.com/qemu-project/qemu/-/blob/v8.0.0/docs/interop/qcow2.txt#L411-L421)
+- [LUKS](https://gitlab.com/qemu-project/qemu/-/blob/v8.0.0/docs/interop/qcow2.txt#L423-L429)
+- [External data](https://gitlab.com/qemu-project/qemu/-/blob/v8.0.0/docs/interop/qcow2.txt#L106-L116)
+
+The following features are experimentally supported:
+- [Extended L2 Entries](https://gitlab.com/qemu-project/qemu/-/blob/v8.0.0/docs/interop/qcow2.txt#L122-L126)

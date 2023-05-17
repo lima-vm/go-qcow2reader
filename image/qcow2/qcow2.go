@@ -802,10 +802,17 @@ func (img *Qcow2) readAtAlignedStandardExtendedL2(p []byte, off int64, desc stan
 	var n int
 	subclusterSize := img.clusterSize / 32
 	hostClusterOffset := desc.hostClusterOffset()
-	subclusterNo := (int(off) % img.clusterSize) / subclusterSize
-	for i := subclusterNo; i < 32; i++ {
+	subclusterNoBegin := (int(off) % img.clusterSize) / subclusterSize
+	for i := subclusterNoBegin; i < 32; i++ { // i is the subcluster number
+		currentOff := off + int64(n)
+		clusterNo := currentOff / int64(img.clusterSize)
+		clusterBegin := clusterNo * int64(img.clusterSize)
+		subclusterBegin := clusterBegin + int64(i)*int64(subclusterSize)
+		subclusterEnd := subclusterBegin + int64(subclusterSize)
+		readSize := subclusterEnd - currentOff
+
 		pIdxBegin := n
-		pIdxEnd := n + subclusterSize
+		pIdxEnd := n + int(readSize)
 		if pIdxEnd > len(p) {
 			pIdxEnd = len(p)
 		}
@@ -823,7 +830,6 @@ func (img *Qcow2) readAtAlignedStandardExtendedL2(p []byte, off int64, desc stan
 				return n, fmt.Errorf("failed to read from the raw offset %d: %w", currentRawOff, err)
 			}
 		} else {
-			currentOff := off + int64(n)
 			if ((extL2Entry.ZeroStatusBitmap >> i) & 0b1) == 0b1 {
 				currentN, err = img.readZero(p[pIdxBegin:pIdxEnd], currentOff)
 				if err != nil {
@@ -902,15 +908,13 @@ func (img *Qcow2) ReadAt(p []byte, off int64) (n int, err error) {
 
 	for remaining > 0 {
 		currentOff := off + int64(n)
+		clusterNo := currentOff / int64(img.clusterSize)
+		clusterBegin := clusterNo * int64(img.clusterSize)
+		clusterEnd := clusterBegin + int64(img.clusterSize)
+		readSize := clusterEnd - currentOff
+
 		pIndexBegin := n
-		pIndexEnd := n + int(img.clusterSize)
-
-		clusterBegin := (off + int64(pIndexBegin)) / int64(img.clusterSize)
-		if clusterEnd := (off + int64(pIndexEnd)) / int64(img.clusterSize); clusterEnd != clusterBegin {
-			currentSize := off + int64(img.clusterSize) - int64(n)
-			pIndexEnd = pIndexBegin + int(currentSize)
-		}
-
+		pIndexEnd := n + int(readSize)
 		if pIndexEnd > len(p) {
 			pIndexEnd = len(p)
 		}

@@ -325,10 +325,11 @@ func (header *Header) Readable() error {
 				switch i {
 				case IncompatibleFeaturesDirtyBit, IncompatibleFeaturesCorruptBit:
 					log.Warnf("unexpected incompatible feature bit: %q", IncompatibleFeaturesNames[i])
+				case IncompatibleFeaturesExtendedL2EntriesBit:
+					log.Warnf("Support for %q is experimental", IncompatibleFeaturesNames[i])
 				case IncompatibleFeaturesCompressionTypeBit:
 					// NOP
-				case IncompatibleFeaturesExternalDataFileBit,
-					IncompatibleFeaturesExtendedL2EntriesBit:
+				case IncompatibleFeaturesExternalDataFileBit:
 					return fmt.Errorf("%w: incompatible feature: %q", ErrUnsupportedFeature, IncompatibleFeaturesNames[i])
 				default:
 					return fmt.Errorf("%w: incompatible feature bit %d", ErrUnsupportedFeature, i)
@@ -466,13 +467,13 @@ func (x l2TableEntry) compressed() bool {
 	return (x>>62)&0b1 == 0b1
 }
 
-/*
 // extendedL2TableEntry is not supported yet
 type extendedL2TableEntry struct {
-	l2TableEntry
-	ext uint64
+	L2TableEntry l2TableEntry
+	// the following bitmaps are meaningless for compressed clusters
+	ZeroStatusBitmap  uint32 // 1: reads as zeros, 0: no effect
+	AllocStatusBitmap uint32 // 1: allocated, 0: not allocated
 }
-*/
 
 func readL2Table(ra io.ReaderAt, offset uint64, clusterSize int) ([]l2TableEntry, error) {
 	if offset == 0 {
@@ -485,6 +486,19 @@ func readL2Table(ra io.ReaderAt, offset uint64, clusterSize int) ([]l2TableEntry
 		return nil, err
 	}
 	return l2Table, nil
+}
+
+func readExtendedL2Table(ra io.ReaderAt, offset uint64, clusterSize int) ([]extendedL2TableEntry, error) {
+	if offset == 0 {
+		return nil, errors.New("invalid extended L2 table offset: 0")
+	}
+	r := io.NewSectionReader(ra, int64(offset), int64(clusterSize))
+	entries := clusterSize / 16
+	extL2Table := make([]extendedL2TableEntry, entries)
+	if err := binary.Read(r, binary.BigEndian, &extL2Table); err != nil {
+		return nil, err
+	}
+	return extL2Table, nil
 }
 
 type standardClusterDescriptor uint64
@@ -662,9 +676,16 @@ func (img *Qcow2) Readable() error {
 	return img.errUnreadable
 }
 
+func (img *Qcow2) extendedL2() bool {
+	return img.Header.HeaderFieldsV3 != nil && img.Header.HeaderFieldsV3.IncompatibleFeatures&(1<<IncompatibleFeaturesExtendedL2EntriesBit) != 0
+}
+
 // readAtAligned requires that off and off+len(p)-1 belong to the same cluster.
 func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 	l2Entries := img.clusterSize / 8
+	if img.extendedL2() {
+		l2Entries = img.clusterSize / 16
+	}
 	l1Index := int((off / int64(img.clusterSize)) / int64(l2Entries))
 	if l1Index >= len(img.l1Table) {
 		return 0, fmt.Errorf("index %d exceeds the L1 table length %d", l1Index, img.l1Table)
@@ -674,20 +695,40 @@ func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 	if l2TableOffset == 0 {
 		return img.readAtAlignedUnallocated(p, off)
 	}
-	l2Table, err := readL2Table(img.ra, l2TableOffset, img.clusterSize)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read L2 table for L1 entry %v (index %d): %w", l1Entry, l1Index, err)
-	}
 	l2Index := int((off / int64(img.clusterSize)) % int64(l2Entries))
-	if l2Index >= len(l2Table) {
-		return 0, fmt.Errorf("index %d exceeds the L2 table length %d", l2Index, l2Table)
+	var (
+		extL2Entry *extendedL2TableEntry
+		l2Entry    l2TableEntry
+	)
+	if img.extendedL2() {
+		// TODO
+		extL2Table, err := readExtendedL2Table(img.ra, l2TableOffset, img.clusterSize)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read extended L2 table for L1 entry %v (index %d): %w", l1Entry, l1Index, err)
+		}
+		if l2Index >= len(extL2Table) {
+			return 0, fmt.Errorf("index %d exceeds the extended L2 table length %d", l2Index, extL2Table)
+		}
+		extL2Entry = &extL2Table[l2Index]
+		l2Entry = extL2Entry.L2TableEntry
+	} else {
+		l2Table, err := readL2Table(img.ra, l2TableOffset, img.clusterSize)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read L2 table for L1 entry %v (index %d): %w", l1Entry, l1Index, err)
+		}
+		if l2Index >= len(l2Table) {
+			return 0, fmt.Errorf("index %d exceeds the L2 table length %d", l2Index, l2Table)
+		}
+		l2Entry = l2Table[l2Index]
 	}
-	l2Entry := l2Table[l2Index]
 	desc := l2Entry.clusterDescriptor()
-	if desc == 0 {
+	if desc == 0 && !img.extendedL2() {
 		return img.readAtAlignedUnallocated(p, off)
 	}
-	var n int
+	var (
+		n   int
+		err error
+	)
 	if l2Entry.compressed() {
 		compressedDesc := compressedClusterDescriptor(desc)
 		n, err = img.readAtAlignedCompressed(p, off, compressedDesc)
@@ -696,9 +737,16 @@ func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 		}
 	} else {
 		standardDesc := standardClusterDescriptor(desc)
-		n, err = img.readAtAlignedStandard(p, off, standardDesc)
-		if err != nil {
-			err = fmt.Errorf("failed to read standard cluster (len=%d, off-%d, desc=0x%X): %w", len(p), off, desc, err)
+		if img.extendedL2() {
+			n, err = img.readAtAlignedStandardExtendedL2(p, off, standardDesc, *extL2Entry)
+			if err != nil {
+				err = fmt.Errorf("failed to read standard cluster with Extended L2 (len=%d, off=%d, desc=0x%X): %w", len(p), off, desc, err)
+			}
+		} else {
+			n, err = img.readAtAlignedStandard(p, off, standardDesc)
+			if err != nil {
+				err = fmt.Errorf("failed to read standard cluster (len=%d, off=%d, desc=0x%X): %w", len(p), off, desc, err)
+			}
 		}
 	}
 	return n, err
@@ -742,6 +790,57 @@ func (img *Qcow2) readAtAlignedStandard(p []byte, off int64, desc standardCluste
 		err = fmt.Errorf("failed to read %d bytes from the raw offset %d: %w", len(p), rawOffset, err)
 	}
 	return n, err
+}
+
+// readAtAlignedStandardExtendedL2 is experimental
+//
+// TODO: read multiple subclusters at once
+//
+// clusterNo = LBA / clusterSize
+// subclusterNo = (LBA % clusterSize) / subclusterSize
+func (img *Qcow2) readAtAlignedStandardExtendedL2(p []byte, off int64, desc standardClusterDescriptor, extL2Entry extendedL2TableEntry) (int, error) {
+	var n int
+	subclusterSize := img.clusterSize / 32
+	hostClusterOffset := desc.hostClusterOffset()
+	subclusterNo := (int(off) % img.clusterSize) / subclusterSize
+	for i := subclusterNo; i < 32; i++ {
+		pIdxBegin := n
+		pIdxEnd := n + subclusterSize
+		if pIdxEnd > len(p) {
+			pIdxEnd = len(p)
+		}
+		if pIdxEnd <= pIdxBegin {
+			break
+		}
+		var (
+			currentN int
+			err      error
+		)
+		if ((extL2Entry.AllocStatusBitmap >> i) & 0b1) == 0b1 {
+			currentRawOff := int64(hostClusterOffset) + (off % int64(img.clusterSize)) + int64(n)
+			currentN, err = img.ra.ReadAt(p[pIdxBegin:pIdxEnd], currentRawOff)
+			if err != nil {
+				return n, fmt.Errorf("failed to read from the raw offset %d: %w", currentRawOff, err)
+			}
+		} else {
+			currentOff := off + int64(n)
+			if ((extL2Entry.ZeroStatusBitmap >> i) & 0b1) == 0b1 {
+				currentN, err = img.readZero(p[pIdxBegin:pIdxEnd], currentOff)
+				if err != nil {
+					return n, fmt.Errorf("failed to read zero: %w", err)
+				}
+			} else {
+				currentN, err = img.readAtAlignedUnallocated(p[pIdxBegin:pIdxEnd], currentOff)
+				if err != nil && !errors.Is(err, io.EOF) {
+					return n, fmt.Errorf("failed to read unallocated: %w", err)
+				}
+			}
+		}
+		if currentN > 0 {
+			n += currentN
+		}
+	}
+	return n, nil
 }
 
 func (img *Qcow2) readAtAlignedCompressed(p []byte, off int64, desc compressedClusterDescriptor) (int, error) {

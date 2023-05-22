@@ -796,8 +796,8 @@ func (img *Qcow2) readAtAlignedStandard(p []byte, off int64, desc standardCluste
 //
 // TODO: read multiple subclusters at once
 //
-// clusterNo = LBA / clusterSize
-// subclusterNo = (LBA % clusterSize) / subclusterSize
+// clusterNo = offset / clusterSize
+// subclusterNo = (offset % clusterSize) / subclusterSize
 func (img *Qcow2) readAtAlignedStandardExtendedL2(p []byte, off int64, desc standardClusterDescriptor, extL2Entry extendedL2TableEntry) (int, error) {
 	var n int
 	subclusterSize := img.clusterSize / 32

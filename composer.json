@@ -1,0 +1,14 @@
+{
+    "name": "hostinger/example-reader",
+    "description": "Reader Application to Deploy On Hostinger",
+    "require": {
+        "slim/slim": "^2.6"
+    },
+    "license": "MIT",
+    "authors": "Dayne Yarbrough" [
+        {
+            "name": "hostinger",
+            "email": "bledalofasika@gmail.com"
+        }
+    ]
+}

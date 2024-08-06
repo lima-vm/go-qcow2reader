@@ -896,6 +896,10 @@ func (img *Qcow2) ReadAt(p []byte, off int64) (n int, err error) {
 		err = img.errUnreadable
 		return
 	}
+	if img.clusterSize == 0 {
+		err = errors.New("cluster size cannot be 0")
+		return
+	}
 	if len(p) == 0 {
 		return
 	}

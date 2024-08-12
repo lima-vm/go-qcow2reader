@@ -9,7 +9,7 @@ Use [`io.NewSectionReader`](https://pkg.go.dev/io#NewSectionReader) to wrap [`io
 f, _ := os.Open("a.qcow2")
 defer f.Close()
 img, _ := qcow2reader.Open(f)
-r, _ := io.NewSectionReader(img, 0, img.Size()))
+r := io.NewSectionReader(img, 0, img.Size()))
 ```
 
 The following features are not supported yet:

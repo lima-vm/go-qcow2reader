@@ -14,6 +14,7 @@ import (
 	"github.com/lima-vm/go-qcow2reader/align"
 	"github.com/lima-vm/go-qcow2reader/image"
 	"github.com/lima-vm/go-qcow2reader/log"
+	"github.com/lima-vm/go-qcow2reader/lru"
 )
 
 const Type = "qcow2"
@@ -536,6 +537,7 @@ type Qcow2 struct {
 	errUnreadable       error
 	clusterSize         int
 	l1Table             []l1TableEntry
+	l2TableCache        *lru.Cache[l1TableEntry, []l2TableEntry]
 	decompressor        Decompressor
 	BackingFile         string     `json:"backing_file"`
 	BackingFileFullPath string     `json:"backing_file_full_path"`
@@ -543,13 +545,17 @@ type Qcow2 struct {
 	backingImage        image.Image
 }
 
+// With the default cluster size (64 Kib) this uses 1 MiB and cover 8 GiB image.
+const maxL2Tables = 16
+
 // Open opens an qcow2 image.
 //
 // To open an image with backing files, ra must implement [Namer],
 // and openWithType must be non-nil.
 func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 	img := &Qcow2{
-		ra: ra,
+		ra:           ra,
+		l2TableCache: lru.New[l1TableEntry, []l2TableEntry](maxL2Tables),
 	}
 	r := io.NewSectionReader(ra, 0, -1)
 	var err error
@@ -680,6 +686,19 @@ func (img *Qcow2) extendedL2() bool {
 	return img.Header.HeaderFieldsV3 != nil && img.Header.HeaderFieldsV3.IncompatibleFeatures&(1<<IncompatibleFeaturesExtendedL2EntriesBit) != 0
 }
 
+func (img *Qcow2) getL2Table(l1Entry l1TableEntry) ([]l2TableEntry, error) {
+	l2Table, ok := img.l2TableCache.Get(l1Entry)
+	if !ok {
+		var err error
+		l2Table, err = readL2Table(img.ra, l1Entry.l2Offset(), img.clusterSize)
+		if err != nil {
+			return nil, err
+		}
+		img.l2TableCache.Add(l1Entry, l2Table)
+	}
+	return l2Table, nil
+}
+
 // readAtAligned requires that off and off+len(p)-1 belong to the same cluster.
 func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 	l2Entries := img.clusterSize / 8
@@ -712,7 +731,7 @@ func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 		extL2Entry = &extL2Table[l2Index]
 		l2Entry = extL2Entry.L2TableEntry
 	} else {
-		l2Table, err := readL2Table(img.ra, l2TableOffset, img.clusterSize)
+		l2Table, err := img.getL2Table(l1Entry)
 		if err != nil {
 			return 0, fmt.Errorf("failed to read L2 table for L1 entry %v (index %d): %w", l1Entry, l1Index, err)
 		}

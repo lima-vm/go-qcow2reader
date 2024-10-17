@@ -902,10 +902,15 @@ func readZero(p []byte, off int64, sz uint64) (int, error) {
 			l = 0
 		}
 		err = io.EOF
+		p = p[:l]
 	}
-	for i := 0; i < l; i++ {
+
+	// Optimized by the compiler to memclr call.
+	// https://go-review.googlesource.com/c/go/+/2520
+	for i := range p {
 		p[i] = 0
 	}
+
 	return l, err
 }
 

@@ -22,10 +22,73 @@ const (
 	CompressionTypeNone = qcow2.CompressionType(255)
 )
 
-func BenchmarkRead(b *testing.B) {
+// Benchmark completely empty sparse image (0% utilization).  This is the best
+// case when we don't have to read any cluster from storage.
+func BenchmarkRead0p(b *testing.B) {
 	const size = 256 * MiB
 	base := filepath.Join(b.TempDir(), "image")
-	if err := createTestImage(base, size); err != nil {
+	if err := createTestImage(base, size, 0.0); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("qcow2", func(b *testing.B) {
+		img := base + ".qocw2"
+		if err := qemuImgConvert(base, img, qcow2.Type, CompressionTypeNone); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
+	})
+	b.Run("qcow2 zlib", func(b *testing.B) {
+		img := base + ".zlib.qcow2"
+		if err := qemuImgConvert(base, img, qcow2.Type, qcow2.CompressionTypeZlib); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
+	})
+	// TODO: qcow2 zstd (not supported yet)
+}
+
+// Benchmark sparse image with 50% utilization matching lima default image.
+func BenchmarkRead50p(b *testing.B) {
+	const size = 256 * MiB
+	base := filepath.Join(b.TempDir(), "image")
+	if err := createTestImage(base, size, 0.5); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("qcow2", func(b *testing.B) {
+		img := base + ".qocw2"
+		if err := qemuImgConvert(base, img, qcow2.Type, CompressionTypeNone); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
+	})
+	b.Run("qcow2 zlib", func(b *testing.B) {
+		img := base + ".zlib.qcow2"
+		if err := qemuImgConvert(base, img, qcow2.Type, qcow2.CompressionTypeZlib); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
+	})
+	// TODO: qcow2 zstd (not supported yet)
+}
+
+// Benchmark fully allocated image. This is the worst case for both uncompressed
+// and compressed image when we must read all clusters from storage.
+func BenchmarkRead100p(b *testing.B) {
+	const size = 256 * MiB
+	base := filepath.Join(b.TempDir(), "image")
+	if err := createTestImage(base, size, 1.0); err != nil {
 		b.Fatal(err)
 	}
 	b.Run("qcow2", func(b *testing.B) {
@@ -85,10 +148,16 @@ func resetBenchmark(b *testing.B, size int64) {
 	b.ReportAllocs()
 }
 
-// createTestImage creates a 50% allocated raw image with fake data that
-// compresses like real image data.
-func createTestImage(filename string, size int64) error {
-	const chunkSize = 4 * MiB
+// createTestImage creates raw image with fake data that compresses like real
+// image data. Utilization deterimines the amount of data to allocate (0.0--1.0).
+func createTestImage(filename string, size int64, utilization float64) error {
+	if utilization < 0 || utilization > 1 {
+		return fmt.Errorf("utilization out of range (0.0-1.0): %f", utilization)
+	}
+
+	const chunkSize = 8 * MiB
+	dataSize := int64(float64(chunkSize) * utilization)
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
@@ -97,17 +166,19 @@ func createTestImage(filename string, size int64) error {
 	if err := file.Truncate(size); err != nil {
 		return err
 	}
-	reader := &Generator{}
-	for offset := int64(0); offset < size; offset += 2 * chunkSize {
-		_, err := file.Seek(offset, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		chunk := io.LimitReader(reader, chunkSize)
-		if n, err := io.Copy(file, chunk); err != nil {
-			return err
-		} else if n != chunkSize {
-			return fmt.Errorf("expected %d bytes, wrote %d bytes", chunkSize, n)
+	if dataSize > 0 {
+		reader := &Generator{}
+		for offset := int64(0); offset < size; offset += chunkSize {
+			_, err := file.Seek(offset, io.SeekStart)
+			if err != nil {
+				return err
+			}
+			chunk := io.LimitReader(reader, dataSize)
+			if n, err := io.Copy(file, chunk); err != nil {
+				return err
+			} else if n != dataSize {
+				return fmt.Errorf("expected %d bytes, wrote %d bytes", dataSize, n)
+			}
 		}
 	}
 	return file.Close()

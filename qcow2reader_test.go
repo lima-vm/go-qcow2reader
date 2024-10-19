@@ -129,7 +129,7 @@ func benchmarkRead(b *testing.B, filename string) {
 	defer img.Close()
 	buf := make([]byte, 1*MiB)
 	reader := io.NewSectionReader(img, 0, img.Size())
-	n, err := io.CopyBuffer(io.Discard, reader, buf)
+	n, err := io.CopyBuffer(Discard, reader, buf)
 
 	b.StopTimer()
 
@@ -140,6 +140,17 @@ func benchmarkRead(b *testing.B, filename string) {
 		b.Fatalf("Expected %d bytes, read %d bytes", img.Size(), n)
 	}
 }
+
+// We cannot use io.Discard since it implements ReadFrom using small buffers
+// size (8192), confusing our test results. Reads smaller than cluster size (64
+// KiB) are extremely inefficient with compressed clusters.
+type discard struct{}
+
+func (discard) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+var Discard = discard{}
 
 func resetBenchmark(b *testing.B, size int64) {
 	b.StopTimer()

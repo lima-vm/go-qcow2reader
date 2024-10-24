@@ -41,6 +41,7 @@ func usage() {
 Available commands:
   info		show image information
   read		read image data and print to stdout
+  convert      convert image to raw format
 `
 	fmt.Fprintf(os.Stderr, usage, os.Args[0])
 	os.Exit(1)
@@ -68,6 +69,8 @@ func main() {
 		err = cmdInfo(args)
 	case "read":
 		err = cmdRead(args)
+	case "convert":
+		err = cmdConvert(args)
 	default:
 		usage()
 	}

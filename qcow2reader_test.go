@@ -11,6 +11,7 @@ import (
 
 	"github.com/lima-vm/go-qcow2reader"
 	"github.com/lima-vm/go-qcow2reader/convert"
+	"github.com/lima-vm/go-qcow2reader/image"
 	"github.com/lima-vm/go-qcow2reader/test/qemuimg"
 )
 
@@ -18,6 +19,186 @@ const (
 	MiB = int64(1) << 20
 	GiB = int64(1) << 30
 )
+
+func TestExtentsUnallocated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "image")
+	if err := qemuimg.Create(path, qemuimg.FormatQcow2, 4*GiB, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := qcow2reader.Open(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer img.Close()
+
+	t.Run("entire image", func(t *testing.T) {
+		actual, err := img.Extent(0, img.Size())
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := image.Extent{Start: 0, Length: img.Size(), Zero: true}
+		if actual != expected {
+			t.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	})
+	t.Run("same result", func(t *testing.T) {
+		r1, err := img.Extent(0, img.Size())
+		if err != nil {
+			t.Fatal(err)
+		}
+		r2, err := img.Extent(0, img.Size())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r1 != r2 {
+			t.Fatalf("expected %+v, got %+v", r1, r2)
+		}
+	})
+	t.Run("all segments", func(t *testing.T) {
+		for i := int64(0); i < img.Size(); i += 32 * MiB {
+			segment, err := img.Extent(i, 32*MiB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := image.Extent{Start: i, Length: 32 * MiB, Zero: true}
+			if segment != expected {
+				t.Fatalf("expected %+v, got %+v", expected, segment)
+			}
+		}
+	})
+	t.Run("start unaligned", func(t *testing.T) {
+		start := 32*MiB + 42
+		length := 32 * MiB
+		actual, err := img.Extent(start, length)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := image.Extent{Start: start, Length: length, Zero: true}
+		if actual != expected {
+			t.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	})
+	t.Run("length unaligned", func(t *testing.T) {
+		start := 32 * MiB
+		length := 32*MiB - 42
+		actual, err := img.Extent(start, length)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := image.Extent{Start: start, Length: length, Zero: true}
+		if actual != expected {
+			t.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	})
+	t.Run("start and length unaligned", func(t *testing.T) {
+		start := 32*MiB + 42
+		length := 32*MiB - 42
+		actual, err := img.Extent(start, length)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := image.Extent{Start: start, Length: length, Zero: true}
+		if actual != expected {
+			t.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	})
+	t.Run("length after end of image", func(t *testing.T) {
+		start := img.Size() - 31*MiB
+		actual, err := img.Extent(start, 32*MiB)
+		if err == nil {
+			t.Fatal("out of bounds request did not fail")
+		}
+		var expected image.Extent
+		if actual != expected {
+			t.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	})
+	t.Run("start after end of image", func(t *testing.T) {
+		start := img.Size() + 1*MiB
+		actual, err := img.Extent(start, 32*MiB)
+		if err == nil {
+			t.Fatal("out of bounds request did not fail")
+		}
+		var expected image.Extent
+		if actual != expected {
+			t.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	})
+}
+
+func TestExtentsRaw(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "disk.img")
+	size := 4 * GiB
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := f.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	img, err := qcow2reader.Open(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer img.Close()
+
+	t.Run("entire image", func(t *testing.T) {
+		actual, err := img.Extent(0, img.Size())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Currently we always report raw images as fully allocated.
+		expected := image.Extent{Start: 0, Length: img.Size(), Allocated: true}
+		if actual != expected {
+			t.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	})
+	t.Run("length after end of image", func(t *testing.T) {
+		start := img.Size() - 31*MiB
+		actual, err := img.Extent(start, 32*MiB)
+		if err == nil {
+			t.Fatal("out of bounds request did not fail")
+		}
+		var expected image.Extent
+		if actual != expected {
+			t.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	})
+}
+
+func BenchmarkExtentsUnallocated(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "image")
+	if err := qemuimg.Create(path, qemuimg.FormatQcow2, 100*GiB, "", ""); err != nil {
+		b.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	img, err := qcow2reader.Open(f)
+	if err != nil {
+		b.Fatal(err)
+	}
+	expected := image.Extent{Start: 0, Length: img.Size(), Zero: true}
+	resetBenchmark(b, img.Size())
+	for i := 0; i < b.N; i++ {
+		b.StartTimer()
+		actual, err := img.Extent(0, img.Size())
+		b.StopTimer()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if actual != expected {
+			b.Fatalf("expected %+v, got %+v", expected, actual)
+		}
+	}
+}
 
 // Benchmark completely empty sparse image (0% utilization).  This is the best
 // case when we don't have to read any cluster from storage.

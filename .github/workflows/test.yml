@@ -20,14 +20,14 @@ jobs:
         with:
           version: v1.52.2
           args: --verbose
-      - name: Unit tests
-        run: go test -v ./...
-      - name: Install go-qcow2reader-example
-        run: cd ./cmd/go-qcow2reader-example && go install
       - name: Install qemu-img as a test dependency
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-utils
+      - name: Unit tests
+        run: go test -v ./...
+      - name: Install go-qcow2reader-example
+        run: cd ./cmd/go-qcow2reader-example && go install
       - name: Cache test-images-ro
         id: cache-test-images-ro
         uses: actions/cache@v4

@@ -699,56 +699,101 @@ func (img *Qcow2) getL2Table(l1Entry l1TableEntry) ([]l2TableEntry, error) {
 	return l2Table, nil
 }
 
-// readAtAligned requires that off and off+len(p)-1 belong to the same cluster.
-func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
-	l2Entries := img.clusterSize / 8
+type clusterMeta struct {
+	L2Entries int
+
+	// L1 info.
+	L1Index int
+	L1Entry l1TableEntry
+
+	// L2 info.
+	L2Index int
+	L2Entry l2TableEntry
+
+	// Extended L2 info.
+	ExtL2Entry extendedL2TableEntry
+
+	// Cluster is not allocated in this image, but it may be allocated in the
+	// backing file.
+	Allocated bool
+
+	// Cluster is present in this image and is compressed.
+	Compressed bool
+
+	// Cluster is present in this image and is all zeros.
+	Zero bool
+}
+
+func (img *Qcow2) getClusterMeta(off int64, cm *clusterMeta) error {
+	cm.L2Entries = img.clusterSize / 8
 	if img.extendedL2() {
-		l2Entries = img.clusterSize / 16
+		cm.L2Entries = img.clusterSize / 16
 	}
-	l1Index := int((off / int64(img.clusterSize)) / int64(l2Entries))
-	if l1Index >= len(img.l1Table) {
-		return 0, fmt.Errorf("index %d exceeds the L1 table length %d", l1Index, len(img.l1Table))
+	cm.L1Index = int((off / int64(img.clusterSize)) / int64(cm.L2Entries))
+	if cm.L1Index >= len(img.l1Table) {
+		return fmt.Errorf("index %d exceeds the L1 table length %d", cm.L1Index, len(img.l1Table))
 	}
-	l1Entry := img.l1Table[l1Index]
-	l2TableOffset := l1Entry.l2Offset()
+
+	cm.L1Entry = img.l1Table[cm.L1Index]
+	l2TableOffset := cm.L1Entry.l2Offset()
 	if l2TableOffset == 0 {
-		return img.readAtAlignedUnallocated(p, off)
+		return nil
 	}
-	l2Index := int((off / int64(img.clusterSize)) % int64(l2Entries))
-	var (
-		extL2Entry *extendedL2TableEntry
-		l2Entry    l2TableEntry
-	)
+
+	cm.L2Index = int((off / int64(img.clusterSize)) % int64(cm.L2Entries))
+
 	if img.extendedL2() {
 		// TODO
 		extL2Table, err := readExtendedL2Table(img.ra, l2TableOffset, img.clusterSize)
 		if err != nil {
-			return 0, fmt.Errorf("failed to read extended L2 table for L1 entry %v (index %d): %w", l1Entry, l1Index, err)
+			return fmt.Errorf("failed to read extended L2 table for L1 entry %v (index %d): %w", cm.L1Entry, cm.L1Index, err)
 		}
-		if l2Index >= len(extL2Table) {
-			return 0, fmt.Errorf("index %d exceeds the extended L2 table length %d", l2Index, len(extL2Table))
+		if cm.L2Index >= len(extL2Table) {
+			return fmt.Errorf("index %d exceeds the extended L2 table length %d", cm.L2Index, len(extL2Table))
 		}
-		extL2Entry = &extL2Table[l2Index]
-		l2Entry = extL2Entry.L2TableEntry
+		cm.ExtL2Entry = extL2Table[cm.L2Index]
+		cm.L2Entry = cm.ExtL2Entry.L2TableEntry
 	} else {
-		l2Table, err := img.getL2Table(l1Entry)
+		l2Table, err := img.getL2Table(cm.L1Entry)
 		if err != nil {
-			return 0, fmt.Errorf("failed to read L2 table for L1 entry %v (index %d): %w", l1Entry, l1Index, err)
+			return fmt.Errorf("failed to read L2 table for L1 entry %v (index %d): %w", cm.L1Entry, cm.L1Index, err)
 		}
-		if l2Index >= len(l2Table) {
-			return 0, fmt.Errorf("index %d exceeds the L2 table length %d", l2Index, len(l2Table))
+		if cm.L2Index >= len(l2Table) {
+			return fmt.Errorf("index %d exceeds the L2 table length %d", cm.L2Index, len(l2Table))
 		}
-		l2Entry = l2Table[l2Index]
+		cm.L2Entry = l2Table[cm.L2Index]
 	}
-	desc := l2Entry.clusterDescriptor()
+
+	desc := cm.L2Entry.clusterDescriptor()
 	if desc == 0 && !img.extendedL2() {
+		return nil
+	}
+
+	cm.Allocated = true
+	if cm.L2Entry.compressed() {
+		cm.Compressed = true
+	} else {
+		cm.Zero = standardClusterDescriptor(desc).allZero()
+	}
+
+	return nil
+}
+
+// readAtAligned requires that off and off+len(p)-1 belong to the same cluster.
+func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
+	var cm clusterMeta
+	if err := img.getClusterMeta(off, &cm); err != nil {
+		return 0, err
+	}
+	if !cm.Allocated {
 		return img.readAtAlignedUnallocated(p, off)
 	}
 	var (
 		n   int
 		err error
 	)
-	if l2Entry.compressed() {
+	desc := cm.L2Entry.clusterDescriptor()
+	if cm.Compressed {
 		compressedDesc := compressedClusterDescriptor(desc)
 		n, err = img.readAtAlignedCompressed(p, off, compressedDesc)
 		if err != nil {
@@ -757,7 +802,7 @@ func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 	} else {
 		standardDesc := standardClusterDescriptor(desc)
 		if img.extendedL2() {
-			n, err = img.readAtAlignedStandardExtendedL2(p, off, standardDesc, *extL2Entry)
+			n, err = img.readAtAlignedStandardExtendedL2(p, off, standardDesc, cm.ExtL2Entry)
 			if err != nil {
 				err = fmt.Errorf("failed to read standard cluster with Extended L2 (len=%d, off=%d, desc=0x%X): %w", len(p), off, desc, err)
 			}

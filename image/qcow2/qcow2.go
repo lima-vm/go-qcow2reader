@@ -707,7 +707,7 @@ func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 	}
 	l1Index := int((off / int64(img.clusterSize)) / int64(l2Entries))
 	if l1Index >= len(img.l1Table) {
-		return 0, fmt.Errorf("index %d exceeds the L1 table length %d", l1Index, img.l1Table)
+		return 0, fmt.Errorf("index %d exceeds the L1 table length %d", l1Index, len(img.l1Table))
 	}
 	l1Entry := img.l1Table[l1Index]
 	l2TableOffset := l1Entry.l2Offset()
@@ -726,7 +726,7 @@ func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 			return 0, fmt.Errorf("failed to read extended L2 table for L1 entry %v (index %d): %w", l1Entry, l1Index, err)
 		}
 		if l2Index >= len(extL2Table) {
-			return 0, fmt.Errorf("index %d exceeds the extended L2 table length %d", l2Index, extL2Table)
+			return 0, fmt.Errorf("index %d exceeds the extended L2 table length %d", l2Index, len(extL2Table))
 		}
 		extL2Entry = &extL2Table[l2Index]
 		l2Entry = extL2Entry.L2TableEntry
@@ -736,7 +736,7 @@ func (img *Qcow2) readAtAligned(p []byte, off int64) (int, error) {
 			return 0, fmt.Errorf("failed to read L2 table for L1 entry %v (index %d): %w", l1Entry, l1Index, err)
 		}
 		if l2Index >= len(l2Table) {
-			return 0, fmt.Errorf("index %d exceeds the L2 table length %d", l2Index, l2Table)
+			return 0, fmt.Errorf("index %d exceeds the L2 table length %d", l2Index, len(l2Table))
 		}
 		l2Entry = l2Table[l2Index]
 	}

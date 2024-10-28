@@ -536,6 +536,7 @@ type Qcow2 struct {
 	HeaderExtensions    []HeaderExtension `json:"header_extensions"`
 	errUnreadable       error
 	clusterSize         int
+	l2Entries           int
 	l1Table             []l1TableEntry
 	l2TableCache        *lru.Cache[l1TableEntry, []l2TableEntry]
 	decompressor        Decompressor
@@ -583,6 +584,13 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 				}
 				img.BackingFileFormat = image.Type(backingFileFormat)
 			}
+		}
+
+		// Used to get cluster metadata.
+		if img.extendedL2() {
+			img.l2Entries = img.clusterSize / 16
+		} else {
+			img.l2Entries = img.clusterSize / 8
 		}
 
 		// Load L1 table
@@ -700,8 +708,6 @@ func (img *Qcow2) getL2Table(l1Entry l1TableEntry) ([]l2TableEntry, error) {
 }
 
 type clusterMeta struct {
-	L2Entries int
-
 	// L1 info.
 	L1Index int
 	L1Entry l1TableEntry
@@ -725,11 +731,8 @@ type clusterMeta struct {
 }
 
 func (img *Qcow2) getClusterMeta(off int64, cm *clusterMeta) error {
-	cm.L2Entries = img.clusterSize / 8
-	if img.extendedL2() {
-		cm.L2Entries = img.clusterSize / 16
-	}
-	cm.L1Index = int((off / int64(img.clusterSize)) / int64(cm.L2Entries))
+	clusterNo := off / int64(img.clusterSize)
+	cm.L1Index = int(clusterNo / int64(img.l2Entries))
 	if cm.L1Index >= len(img.l1Table) {
 		return fmt.Errorf("index %d exceeds the L1 table length %d", cm.L1Index, len(img.l1Table))
 	}
@@ -740,7 +743,7 @@ func (img *Qcow2) getClusterMeta(off int64, cm *clusterMeta) error {
 		return nil
 	}
 
-	cm.L2Index = int((off / int64(img.clusterSize)) % int64(cm.L2Entries))
+	cm.L2Index = int(clusterNo % int64(img.l2Entries))
 
 	if img.extendedL2() {
 		// TODO

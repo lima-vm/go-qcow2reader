@@ -1,26 +1,22 @@
-package qcow2reader
+// Package qcow2reader_test keeps blackbox tests for qcow2reader.
+package qcow2reader_test
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/lima-vm/go-qcow2reader"
 	"github.com/lima-vm/go-qcow2reader/convert"
-	"github.com/lima-vm/go-qcow2reader/image"
-	"github.com/lima-vm/go-qcow2reader/image/qcow2"
+	"github.com/lima-vm/go-qcow2reader/test/qemuimg"
 )
 
 const (
 	MiB = int64(1) << 20
 	GiB = int64(1) << 30
-
-	CompressionTypeNone = qcow2.CompressionType(255)
 )
 
 // Benchmark completely empty sparse image (0% utilization).  This is the best
@@ -33,7 +29,7 @@ func Benchmark0p(b *testing.B) {
 	}
 	b.Run("qcow2", func(b *testing.B) {
 		img := base + ".qocw2"
-		if err := qemuImgConvert(base, img, qcow2.Type, CompressionTypeNone); err != nil {
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
 		b.Run("read", func(b *testing.B) {
@@ -51,7 +47,7 @@ func Benchmark0p(b *testing.B) {
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
-		if err := qemuImgConvert(base, img, qcow2.Type, qcow2.CompressionTypeZlib); err != nil {
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
 		b.Run("read", func(b *testing.B) {
@@ -79,7 +75,7 @@ func Benchmark50p(b *testing.B) {
 	}
 	b.Run("qcow2", func(b *testing.B) {
 		img := base + ".qocw2"
-		if err := qemuImgConvert(base, img, qcow2.Type, CompressionTypeNone); err != nil {
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
 		b.Run("read", func(b *testing.B) {
@@ -97,7 +93,7 @@ func Benchmark50p(b *testing.B) {
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
-		if err := qemuImgConvert(base, img, qcow2.Type, qcow2.CompressionTypeZlib); err != nil {
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
 		b.Run("read", func(b *testing.B) {
@@ -126,7 +122,7 @@ func Benchmark100p(b *testing.B) {
 	}
 	b.Run("qcow2", func(b *testing.B) {
 		img := base + ".qocw2"
-		if err := qemuImgConvert(base, img, qcow2.Type, CompressionTypeNone); err != nil {
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
 		b.Run("read", func(b *testing.B) {
@@ -144,7 +140,7 @@ func Benchmark100p(b *testing.B) {
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
-		if err := qemuImgConvert(base, img, qcow2.Type, qcow2.CompressionTypeZlib); err != nil {
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
 		b.Run("read", func(b *testing.B) {
@@ -171,7 +167,7 @@ func benchmarkRead(b *testing.B, filename string) {
 		b.Fatal(err)
 	}
 	defer f.Close()
-	img, err := Open(f)
+	img, err := qcow2reader.Open(f)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -198,7 +194,7 @@ func benchmarkConvert(b *testing.B, filename string) {
 		b.Fatal(err)
 	}
 	defer f.Close()
-	img, err := Open(f)
+	img, err := qcow2reader.Open(f)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -288,26 +284,4 @@ func (g *Generator) Read(b []byte) (int, error) {
 		b[i], b[j] = b[j], b[i]
 	})
 	return len(b), nil
-}
-
-func qemuImgConvert(src, dst string, dstFormat image.Type, compressionType qcow2.CompressionType) error {
-	args := []string{"convert", "-O", string(dstFormat)}
-	if compressionType != CompressionTypeNone {
-		args = append(args, "-c", "-o", "compression_type="+compressionType.String())
-	}
-	args = append(args, src, dst)
-	cmd := exec.Command("qemu-img", args...)
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Return qemu-img stderr instead of the unhelpful default error (exited
-		// with status 1).
-		if _, ok := err.(*exec.ExitError); ok {
-			return errors.New(stderr.String())
-		}
-		return err
-	}
-	return nil
 }

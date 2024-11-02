@@ -41,7 +41,8 @@ func usage() {
 Available commands:
   info		show image information
   read		read image data and print to stdout
-  convert      convert image to raw format
+  convert	convert image to raw format
+  map		print image extents
 `
 	fmt.Fprintf(os.Stderr, usage, os.Args[0])
 	os.Exit(1)
@@ -71,6 +72,8 @@ func main() {
 		err = cmdRead(args)
 	case "convert":
 		err = cmdConvert(args)
+	case "map":
+		err = cmdMap(args)
 	default:
 		usage()
 	}

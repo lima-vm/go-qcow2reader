@@ -67,7 +67,20 @@ func cmdRead(args []string) error {
 
 	buf := make([]byte, bufferSize)
 	sr := io.NewSectionReader(img, offset, length)
-	_, err = io.CopyBuffer(os.Stdout, sr, buf)
+	w := &hideReadFrom{os.Stdout}
+
+	_, err = io.CopyBuffer(w, sr, buf)
 
 	return err
+}
+
+// hideReadFrom hides os.File ReadFrom method to ensure that io.CopyBuffer()
+// will use our buffer, speeding up the copy significantly. For more info see
+// https://github.com/lima-vm/go-qcow2reader/pull/42.
+type hideReadFrom struct {
+	f *os.File
+}
+
+func (w *hideReadFrom) Write(p []byte) (int, error) {
+	return w.f.Write(p)
 }

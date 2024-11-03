@@ -1,6 +1,6 @@
 module github.com/lima-vm/go-qcow2reader/cmd/go-qcow2reader-example
 
-go 1.20
+go 1.22
 
 require (
 	github.com/klauspost/compress v1.16.5

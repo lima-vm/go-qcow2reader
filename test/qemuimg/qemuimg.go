@@ -2,8 +2,9 @@ package qemuimg
 
 import (
 	"bytes"
-	"errors"
+	"fmt"
 	"os/exec"
+	"strconv"
 )
 
 type CompressionType string
@@ -26,18 +27,30 @@ func Convert(src, dst string, dstFormat Format, compressionType CompressionType)
 		args = append(args, "-c", "-o", "compression_type="+string(compressionType))
 	}
 	args = append(args, src, dst)
-	cmd := exec.Command("qemu-img", args...)
+	_, err := qemuImg(args)
+	return err
+}
 
+func Create(path string, format Format, size int64, backingFile string, backingFormat Format) error {
+	args := []string{"create", "-f", string(format)}
+	if backingFile != "" {
+		args = append(args, "-b", backingFile, "-F", string(backingFormat))
+	}
+	args = append(args, path, strconv.FormatInt(size, 10))
+	_, err := qemuImg(args)
+	return err
+}
+
+func qemuImg(args []string) ([]byte, error) {
+	cmd := exec.Command("qemu-img", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Return qemu-img stderr instead of the unhelpful default error (exited
-		// with status 1).
+	out, err := cmd.Output()
+	if err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
-			return errors.New(stderr.String())
+			return out, fmt.Errorf("%w: stderr=%q", err, stderr.String())
 		}
-		return err
+		return out, err
 	}
-	return nil
+	return out, nil
 }

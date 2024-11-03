@@ -11,7 +11,7 @@ import (
 const BufferSize = 1024 * 1024
 
 // Smaller value may increase the overhead of synchornizing multiple works.
-// Larger value may be less efficient for smaller images. The defualt value
+// Larger value may be less efficient for smaller images. The default value
 // gives good results for the lima default Ubuntu image.
 const SegmentSize = 32 * BufferSize
 
@@ -80,7 +80,7 @@ type Converter struct {
 	err    error
 }
 
-// New returns a new converter intialized from options.
+// New returns a new converter initialized from options.
 func New(opts Options) (*Converter, error) {
 	if err := opts.Validate(); err != nil {
 		return nil, err
@@ -113,7 +113,7 @@ func (c *Converter) nextSegment() (int64, int64, bool) {
 	return start, c.offset, false
 }
 
-// setError keeps the first error set. Setting the error signal other workes to
+// setError keeps the first error set. Setting the error signal other workers to
 // abort the operation.
 func (c *Converter) setError(err error) {
 	c.mutex.Lock()
@@ -166,7 +166,7 @@ func (c *Converter) Convert(wa io.WriterAt, ra io.ReaderAt, size int64) error {
 						}
 
 						// EOF for the last read of the last segment is expected, but since we
-						// read exactly size bytes, we shoud never get a zero read.
+						// read exactly size bytes, we should never get a zero read.
 						if nr == 0 {
 							c.setError(errors.New("unexpected EOF"))
 							return

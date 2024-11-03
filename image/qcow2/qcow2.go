@@ -944,7 +944,11 @@ func (img *Qcow2) readZero(p []byte, off int64) (int, error) {
 func readZero(p []byte, off int64, sz uint64) (int, error) {
 	var err error
 	l := len(p)
-	if uint64(off+int64(l)) >= sz {
+	// If the n = len(p) bytes returned by ReadAt are at the end of the input
+	// source, ReadAt may return either err == EOF or err == nil. Returning io.EOF
+	// seems to confuse io.SectionReader so we return EOF only for out of bound
+	// request.
+	if uint64(off+int64(l)) > sz {
 		l = int(sz - uint64(off))
 		if l < 0 {
 			l = 0

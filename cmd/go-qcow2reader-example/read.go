@@ -29,7 +29,7 @@ func cmdRead(args []string) error {
 		flag.PrintDefaults()
 	}
 	fs.BoolVar(&debug, "debug", false, "enable printing debug messages")
-	fs.IntVar(&bufferSize, "buffer-size", 65536, "buffer size")
+	fs.IntVar(&bufferSize, "buffer-size", 2*1024*1024, "buffer size")
 	fs.Int64Var(&offset, "offset", 0, "offset to read")
 	fs.Int64Var(&length, "length", -1, "length to read")
 	if err := fs.Parse(args); err != nil {

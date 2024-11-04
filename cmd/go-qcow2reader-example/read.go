@@ -29,7 +29,7 @@ func cmdRead(args []string) error {
 		flag.PrintDefaults()
 	}
 	fs.BoolVar(&debug, "debug", false, "enable printing debug messages")
-	fs.IntVar(&bufferSize, "buffer-size", 65536, "buffer size")
+	fs.IntVar(&bufferSize, "buffer-size", 2*1024*1024, "buffer size")
 	fs.Int64Var(&offset, "offset", 0, "offset to read")
 	fs.Int64Var(&length, "length", -1, "length to read")
 	if err := fs.Parse(args); err != nil {
@@ -67,7 +67,20 @@ func cmdRead(args []string) error {
 
 	buf := make([]byte, bufferSize)
 	sr := io.NewSectionReader(img, offset, length)
-	_, err = io.CopyBuffer(os.Stdout, sr, buf)
+	w := &hideReadFrom{os.Stdout}
+
+	_, err = io.CopyBuffer(w, sr, buf)
 
 	return err
+}
+
+// hideReadFrom hides os.File ReadFrom method to ensure that io.CopyBuffer()
+// will use our buffer, speeding up the copy significantly. For more info see
+// https://github.com/lima-vm/go-qcow2reader/pull/42.
+type hideReadFrom struct {
+	f *os.File
+}
+
+func (w *hideReadFrom) Write(p []byte) (int, error) {
+	return w.f.Write(p)
 }

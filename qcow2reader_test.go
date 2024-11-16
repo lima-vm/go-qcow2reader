@@ -465,6 +465,75 @@ func TestExtentsBackingFile(t *testing.T) {
 	})
 }
 
+func TestExtentsBackingFileShort(t *testing.T) {
+	// Test the special case of shorter backing file. The typical use case is
+	// adding a large qcow2 image on top of a small os image.
+	baseExtents := []image.Extent{
+		{Start: 0 * clusterSize, Length: 10 * clusterSize, Allocated: true},
+		{Start: 10 * clusterSize, Length: 90 * clusterSize, Zero: true},
+	}
+	topExtents := []image.Extent{
+		{Start: 0 * clusterSize, Length: 5 * clusterSize, Zero: true},
+		{Start: 5 * clusterSize, Length: 10 * clusterSize, Allocated: true},
+		{Start: 15 * clusterSize, Length: 984 * clusterSize, Zero: true},
+		{Start: 999 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+	}
+	expected := []image.Extent{
+		{Start: 0 * clusterSize, Length: 15 * clusterSize, Allocated: true},
+		{Start: 15 * clusterSize, Length: 984 * clusterSize, Zero: true},
+		{Start: 999 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+	}
+	tmpDir := t.TempDir()
+	base := filepath.Join(tmpDir, "base.qcow2")
+	if err := createTestImageWithExtents(base, qemuimg.FormatQcow2, baseExtents, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	top := filepath.Join(tmpDir, "top.qcow2")
+	if err := createTestImageWithExtents(top, qemuimg.FormatQcow2, topExtents, base, qemuimg.FormatQcow2); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := listExtents(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(expected, actual) {
+		t.Fatalf("expected %v, got %v", expected, actual)
+	}
+}
+
+func TestExtentsBackingFileShortUnaligned(t *testing.T) {
+	// Test the special case of raw backing file not aligned to cluster size. When
+	// getting a short extent from the end of the backing file, we aligned the
+	// extent length to the top image cluster size.
+	blockSize := 4 * KiB
+	baseExtents := []image.Extent{
+		{Start: 0, Length: 100 * blockSize, Allocated: true},
+	}
+	topExtents := []image.Extent{
+		{Start: 0, Length: 10 * clusterSize, Zero: true},
+	}
+	expected := []image.Extent{
+		{Start: 0 * clusterSize, Length: 7 * clusterSize, Allocated: true},
+		{Start: 7 * clusterSize, Length: 3 * clusterSize, Zero: true},
+	}
+	tmpDir := t.TempDir()
+	base := filepath.Join(tmpDir, "base.raw")
+	if err := createTestImageWithExtents(base, qemuimg.FormatRaw, baseExtents, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	top := filepath.Join(tmpDir, "top.qcow2")
+	if err := createTestImageWithExtents(top, qemuimg.FormatQcow2, topExtents, base, qemuimg.FormatRaw); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := listExtents(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(expected, actual) {
+		t.Fatalf("expected %v, got %v", expected, actual)
+	}
+}
+
 func compressed(extents []image.Extent) []image.Extent {
 	var res []image.Extent
 	for _, extent := range extents {

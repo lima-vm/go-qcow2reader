@@ -562,7 +562,7 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 	var err error
 	img.Header, err = readHeader(r)
 	if err != nil {
-		return nil, fmt.Errorf("faild to read header: %w", err)
+		return nil, fmt.Errorf("failed to read header: %w", err)
 	}
 	img.errUnreadable = img.Header.Readable() // cache
 	if img.errUnreadable == nil {
@@ -596,7 +596,7 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 		// Load L1 table
 		img.l1Table, err = readL1Table(ra, img.Header.L1TableOffset, img.Header.L1Size)
 		if err != nil {
-			return img, fmt.Errorf("faild to read L1 table: %w", err)
+			return img, fmt.Errorf("failed to read L1 table: %w", err)
 		}
 
 		// Load decompressor

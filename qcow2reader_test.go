@@ -371,6 +371,100 @@ func TestExtentsZero(t *testing.T) {
 	})
 }
 
+func TestExtentsBackingFile(t *testing.T) {
+	// Create an image with some clusters in the backing file, and some cluasters
+	// in the image. Accessing extents should present a unified view using both
+	// image and backing file.
+	tmpDir := t.TempDir()
+	baseExtents := []image.Extent{
+		{Start: 0 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+		{Start: 1 * clusterSize, Length: 9 * clusterSize, Zero: true},
+		{Start: 10 * clusterSize, Length: 2 * clusterSize, Allocated: true},
+		{Start: 12 * clusterSize, Length: 88 * clusterSize, Zero: true},
+		{Start: 100 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+		{Start: 101 * clusterSize, Length: 899 * clusterSize, Zero: true},
+	}
+	topExtents := []image.Extent{
+		{Start: 0 * clusterSize, Length: 1 * clusterSize, Zero: true},
+		{Start: 1 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+		{Start: 2 * clusterSize, Length: 9 * clusterSize, Zero: true},
+		{Start: 11 * clusterSize, Length: 2 * clusterSize, Allocated: true},
+		{Start: 13 * clusterSize, Length: 986 * clusterSize, Zero: true},
+		{Start: 999 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+	}
+	baseRaw := filepath.Join(tmpDir, "base.raw")
+	if err := createTestImageWithExtents(baseRaw, qemuimg.FormatRaw, baseExtents, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("qcow2", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		baseQcow2 := filepath.Join(tmpDir, "base.qcow2")
+		if err := qemuimg.Convert(baseRaw, baseQcow2, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
+			t.Fatal(err)
+		}
+		top := filepath.Join(tmpDir, "top.qcow2")
+		if err := createTestImageWithExtents(top, qemuimg.FormatQcow2, topExtents, baseQcow2, qemuimg.FormatQcow2); err != nil {
+			t.Fatal(err)
+		}
+		// When top and base are uncompressed, extents from to and based are merged.
+		expected := []image.Extent{
+			{Start: 0 * clusterSize, Length: 2 * clusterSize, Allocated: true},
+			{Start: 2 * clusterSize, Length: 8 * clusterSize, Zero: true},
+			{Start: 10 * clusterSize, Length: 3 * clusterSize, Allocated: true},
+			{Start: 13 * clusterSize, Length: 87 * clusterSize, Zero: true},
+			{Start: 100 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+			{Start: 101 * clusterSize, Length: 898 * clusterSize, Zero: true},
+			{Start: 999 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+		}
+		actual, err := listExtents(top)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(expected, actual) {
+			t.Fatalf("expected %v, got %v", expected, actual)
+		}
+	})
+	t.Run("qcow2 zlib", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		baseQcow2Zlib := filepath.Join(tmpDir, "base.qcow2")
+		if err := qemuimg.Convert(baseRaw, baseQcow2Zlib, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
+			t.Fatal(err)
+		}
+		top := filepath.Join(tmpDir, "top.qcow2")
+		if err := createTestImageWithExtents(top, qemuimg.FormatQcow2, topExtents, baseQcow2Zlib, qemuimg.FormatQcow2); err != nil {
+			t.Fatal(err)
+		}
+		// When base is compressed, extents from to and based cannot be merged since
+		// allocated extents from base are compressed. When copying we can merge
+		// extents with different types that read as zero.
+		expected := []image.Extent{
+			// From base
+			{Start: 0 * clusterSize, Length: 1 * clusterSize, Allocated: true, Compressed: true},
+			// From top
+			{Start: 1 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+			{Start: 2 * clusterSize, Length: 8 * clusterSize, Zero: true},
+			// From base
+			{Start: 10 * clusterSize, Length: 1 * clusterSize, Allocated: true, Compressed: true},
+			// From top (top clusters hide base clusters)
+			{Start: 11 * clusterSize, Length: 2 * clusterSize, Allocated: true},
+			{Start: 13 * clusterSize, Length: 87 * clusterSize, Zero: true},
+			// From base
+			{Start: 100 * clusterSize, Length: 1 * clusterSize, Allocated: true, Compressed: true},
+			{Start: 101 * clusterSize, Length: 898 * clusterSize, Zero: true},
+			// From top
+			{Start: 999 * clusterSize, Length: 1 * clusterSize, Allocated: true},
+		}
+		actual, err := listExtents(top)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(expected, actual) {
+			t.Fatalf("expected %v, got %v", expected, actual)
+		}
+	})
+}
+
 func compressed(extents []image.Extent) []image.Extent {
 	var res []image.Extent
 	for _, extent := range extents {

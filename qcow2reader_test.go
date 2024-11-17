@@ -809,7 +809,7 @@ func benchmarkConvert(b *testing.B, filename string) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	err = c.Convert(dst, img, img.Size())
+	err = c.Convert(dst, img, img.Size(), nil)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -76,7 +76,7 @@ func cmdConvert(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.Convert(t, img, img.Size()); err != nil {
+	if err := c.Convert(t, img, img.Size(), nil); err != nil {
 		return err
 	}
 

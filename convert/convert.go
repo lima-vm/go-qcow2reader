@@ -78,6 +78,14 @@ func (o *Options) Validate() error {
 	return nil
 }
 
+// Updater is an interface for tracking conversion progress.
+type Updater interface {
+	// Called from multiple goroutines after a byte range of length was converted.
+	// If the conversion is successfu, the total number of bytes will be the image
+	// virtual size.
+	Update(n int64)
+}
+
 type Converter struct {
 	// Read only after starting.
 	size        int64
@@ -146,6 +154,7 @@ func (c *Converter) reset(size int64) {
 // file full of zeroes. To get a sparse target image, the image must be a new
 // empty file, since Convert does not punch holes for zero ranges even if the
 // underlying file system supports hole punching.
+func (c *Converter) Convert(wa io.WriterAt, img image.Image, size int64, progress Updater) error {
 	c.reset(size)
 
 	zero := make([]byte, c.bufferSize)
@@ -172,6 +181,9 @@ func (c *Converter) reset(size int64) {
 					}
 					if extent.Zero {
 						start += extent.Length
+						if progress != nil {
+							progress.Update(extent.Length)
+						}
 						continue
 					}
 
@@ -209,6 +221,10 @@ func (c *Converter) reset(size int64) {
 								c.setError(fmt.Errorf("read %d, but wrote %d bytes", nr, nw))
 								return
 							}
+						}
+
+						if progress != nil {
+							progress.Update(int64(nr))
 						}
 
 						extent.Length -= int64(nr)

@@ -25,6 +25,10 @@ type Stub struct {
 	t image.Type
 }
 
+func (img *Stub) Extent(start, length int64) (image.Extent, error) {
+	return image.Extent{}, fmt.Errorf("unimplemented type: %q", img.t)
+}
+
 func (img *Stub) ReadAt([]byte, int64) (int, error) {
 	return 0, img.Readable()
 }

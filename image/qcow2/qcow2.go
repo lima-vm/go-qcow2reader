@@ -562,7 +562,7 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 	var err error
 	img.Header, err = readHeader(r)
 	if err != nil {
-		return nil, fmt.Errorf("faild to read header: %w", err)
+		return nil, fmt.Errorf("failed to read header: %w", err)
 	}
 	img.errUnreadable = img.Header.Readable() // cache
 	if img.errUnreadable == nil {
@@ -596,7 +596,7 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 		// Load L1 table
 		img.l1Table, err = readL1Table(ra, img.Header.L1TableOffset, img.Header.L1Size)
 		if err != nil {
-			return img, fmt.Errorf("faild to read L1 table: %w", err)
+			return img, fmt.Errorf("failed to read L1 table: %w", err)
 		}
 
 		// Load decompressor
@@ -776,6 +776,9 @@ func (img *Qcow2) getClusterMeta(off int64, cm *clusterMeta) error {
 	if cm.L2Entry.compressed() {
 		cm.Compressed = true
 	} else {
+		// When using extended L2 clusters this is always false. To find which sub
+		// cluster is allocated/zero we need to iterate over the allocation bitmap in
+		// the extended l2 cluster entry.
 		cm.Zero = standardClusterDescriptor(desc).allZero()
 	}
 
@@ -964,6 +967,110 @@ func readZero(p []byte, off int64, sz uint64) (int, error) {
 	}
 
 	return l, err
+}
+
+// clusterStatus returns an extent describing a single cluster. off must be aligned to
+// cluster size.
+func (img *Qcow2) clusterStatus(off int64) (image.Extent, error) {
+	var cm clusterMeta
+	if err := img.getClusterMeta(off, &cm); err != nil {
+		return image.Extent{}, err
+	}
+
+	if !cm.Allocated {
+		// If there is no backing file, or the cluster cannot be in the backing file,
+		// return an unallocated cluster.
+		if img.backingImage == nil || off >= img.backingImage.Size() {
+			// Unallocated cluster reads as zeros.
+			unallocated := image.Extent{Start: off, Length: int64(img.clusterSize), Zero: true}
+			return unallocated, nil
+		}
+
+		// Get the cluster from the backing file.
+		length := int64(img.clusterSize)
+		if off+length > img.backingImage.Size() {
+			length = img.backingImage.Size() - off
+		}
+		parent, err := img.backingImage.Extent(off, length)
+		if err != nil {
+			return parent, err
+		}
+		// The backing image may be a raw image not aligned to cluster size.
+		parent.Length = int64(img.clusterSize)
+		return parent, nil
+	}
+
+	// Cluster present in this image.
+	allocated := image.Extent{
+		Start:      off,
+		Length:     int64(img.clusterSize),
+		Allocated:  true,
+		Compressed: cm.Compressed,
+		Zero:       cm.Zero,
+	}
+	return allocated, nil
+}
+
+// Return true if extents have the same status.
+func sameStatus(a, b image.Extent) bool {
+	return a.Allocated == b.Allocated && a.Zero == b.Zero && a.Compressed == b.Compressed
+}
+
+// Extent returns the next extent starting at the specified offset. An extent
+// describes one or more clusters having the same status. The maximum length of
+// the returned extent is limited by the specified length. The minimum length of
+// the returned extent is length of one cluster.
+func (img *Qcow2) Extent(start, length int64) (image.Extent, error) {
+	// Default to zero length non-existent cluster.
+	var current image.Extent
+
+	if img.errUnreadable != nil {
+		return current, img.errUnreadable
+	}
+	if img.clusterSize == 0 {
+		return current, errors.New("cluster size cannot be 0")
+	}
+	if start+length > int64(img.Header.Size) {
+		return current, errors.New("length out of bounds")
+	}
+
+	// Compute the clusterStart of the first cluster to query. This may be behind start.
+	clusterStart := start / int64(img.clusterSize) * int64(img.clusterSize)
+
+	remaining := length
+	for remaining > 0 {
+		clusterStatus, err := img.clusterStatus(clusterStart)
+		if err != nil {
+			return current, err
+		}
+
+		// First cluster: if start is not aligned to cluster size, clip the start.
+		if clusterStatus.Start < start {
+			clusterStatus.Start = start
+			clusterStatus.Length -= start - clusterStatus.Start
+		}
+
+		// Last cluster: if start+length is not aligned to cluster size, clip the end.
+		if remaining < int64(img.clusterSize) {
+			clusterStatus.Length -= int64(img.clusterSize) - remaining
+		}
+
+		if current.Length == 0 {
+			// First cluster: copy status to current.
+			current = clusterStatus
+		} else if sameStatus(current, clusterStatus) {
+			// Cluster with same status: extend current.
+			current.Length += clusterStatus.Length
+		} else {
+			// Start of next extent
+			break
+		}
+
+		clusterStart += int64(img.clusterSize)
+		remaining -= clusterStatus.Length
+	}
+
+	return current, nil
 }
 
 // ReadAt implements [io.ReaderAt].

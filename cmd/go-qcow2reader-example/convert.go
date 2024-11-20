@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cheggaaa/pb/v3"
 	"github.com/lima-vm/go-qcow2reader"
 	"github.com/lima-vm/go-qcow2reader/convert"
 	"github.com/lima-vm/go-qcow2reader/log"
@@ -76,7 +77,12 @@ func cmdConvert(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.Convert(t, img, img.Size()); err != nil {
+
+	bar := newProgressBar(img.Size())
+	bar.Start()
+	defer bar.Finish()
+
+	if err := c.Convert(t, img, img.Size(), bar); err != nil {
 		return err
 	}
 
@@ -85,4 +91,19 @@ func cmdConvert(args []string) error {
 	}
 
 	return t.Close()
+}
+
+// progressBar adapts pb.ProgressBar to the Updater interface.
+type progressBar struct {
+	*pb.ProgressBar
+}
+
+func newProgressBar(size int64) *progressBar {
+	b := &progressBar{pb.New64(size)}
+	b.Set(pb.Bytes, true)
+	return b
+}
+
+func (b *progressBar) Update(n int64) {
+	b.ProgressBar.Add64(n)
 }

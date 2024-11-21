@@ -32,6 +32,14 @@ const SegmentSize = 32 * BufferSize
 // results with lima default Ubuntu image.
 const Workers = 8
 
+// Updater is an interface for tracking conversion progress.
+type Updater interface {
+	// Called from multiple goroutines after a byte range of length was converted.
+	// If the conversion is successfu, the total number of bytes will be the image
+	// virtual size.
+	Update(n int64)
+}
+
 type Options struct {
 	// SegmentSize in bytes. Must be aligned to BufferSize. If not set, use the
 	// default value (32 MiB).
@@ -43,6 +51,9 @@ type Options struct {
 	// Workers is the number of goroutines copying buffers in parallel. If not set
 	// use the default value (8).
 	Workers int
+
+	// If set, update progress during conversion.
+	Progress Updater
 }
 
 // Validate validates options and set default values. Returns an error for
@@ -78,44 +89,21 @@ func (o *Options) Validate() error {
 	return nil
 }
 
-// Updater is an interface for tracking conversion progress.
-type Updater interface {
-	// Called from multiple goroutines after a byte range of length was converted.
-	// If the conversion is successfu, the total number of bytes will be the image
-	// virtual size.
-	Update(n int64)
-}
-
-type Converter struct {
-	// Read only after starting.
+type conversion struct {
+	// Read only.
 	size        int64
 	segmentSize int64
-	bufferSize  int
-	workers     int
 
-	// State modified during Convert, protected by the mutex.
+	// Modified during Convert, protected by the mutex.
 	mutex  sync.Mutex
 	offset int64
 	err    error
 }
 
-// New returns a new converter initialized from options.
-func New(opts Options) (*Converter, error) {
-	if err := opts.Validate(); err != nil {
-		return nil, err
-	}
-	c := &Converter{
-		segmentSize: opts.SegmentSize,
-		bufferSize:  opts.BufferSize,
-		workers:     opts.Workers,
-	}
-	return c, nil
-}
-
 // nextSegment returns the next segment to process and stop flag. The stop flag
 // is true if there is no more work, or if another workers has failed and set
 // the error.
-func (c *Converter) nextSegment() (int64, int64, bool) {
+func (c *conversion) nextSegment() (int64, int64, bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -134,7 +122,7 @@ func (c *Converter) nextSegment() (int64, int64, bool) {
 
 // setError keeps the first error set. Setting the error signal other workers to
 // abort the operation.
-func (c *Converter) setError(err error) {
+func (c *conversion) setError(err error) {
 	c.mutex.Lock()
 	if c.err == nil {
 		c.err = err
@@ -142,29 +130,25 @@ func (c *Converter) setError(err error) {
 	c.mutex.Unlock()
 }
 
-func (c *Converter) reset(size int64) {
-	c.size = size
-	c.err = nil
-	c.offset = 0
-}
-
-// Convert copy size bytes from image to io.WriterAt. Unallocated extents in the
-// source image or read data which is all zeros are converted to unallocated
-// byte range in the target image. The target image must be new empty file or a
-// file full of zeroes. To get a sparse target image, the image must be a new
-// empty file, since Convert does not punch holes for zero ranges even if the
-// underlying file system supports hole punching.
-func (c *Converter) Convert(wa io.WriterAt, img image.Image, size int64, progress Updater) error {
-	c.reset(size)
-
-	zero := make([]byte, c.bufferSize)
+// Convert copy image to io.WriterAt. Unallocated extents in the image or read
+// data which is all zeros are converted to unallocated byte range in the target
+// image. The target image must be new empty file or a file full of zeroes. To
+// get a sparse target image, the image must be a new empty file, since Convert
+// does not punch holes for zero ranges even if the underlying file system
+// supports hole punching.
+func Convert(wa io.WriterAt, img image.Image, opts Options) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+	c := conversion{size: img.Size(), segmentSize: opts.SegmentSize}
+	zero := make([]byte, opts.BufferSize)
 	var wg sync.WaitGroup
 
-	for i := 0; i < c.workers; i++ {
+	for i := 0; i < opts.Workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			buf := make([]byte, c.bufferSize)
+			buf := make([]byte, opts.BufferSize)
 			for {
 				// Get next segment to copy.
 				start, end, stop := c.nextSegment()
@@ -181,8 +165,8 @@ func (c *Converter) Convert(wa io.WriterAt, img image.Image, size int64, progres
 					}
 					if extent.Zero {
 						start += extent.Length
-						if progress != nil {
-							progress.Update(extent.Length)
+						if opts.Progress != nil {
+							opts.Progress.Update(extent.Length)
 						}
 						continue
 					}
@@ -223,8 +207,8 @@ func (c *Converter) Convert(wa io.WriterAt, img image.Image, size int64, progres
 							}
 						}
 
-						if progress != nil {
-							progress.Update(int64(nr))
+						if opts.Progress != nil {
+							opts.Progress.Update(int64(nr))
 						}
 
 						extent.Length -= int64(nr)

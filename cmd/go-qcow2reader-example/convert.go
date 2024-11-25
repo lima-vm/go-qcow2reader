@@ -73,16 +73,12 @@ func cmdConvert(args []string) error {
 		return err
 	}
 
-	c, err := convert.New(options)
-	if err != nil {
-		return err
-	}
-
 	bar := newProgressBar(img.Size())
 	bar.Start()
 	defer bar.Finish()
+	options.Progress = bar
 
-	if err := c.Convert(t, img, img.Size(), bar); err != nil {
+	if err := convert.Convert(t, img, options); err != nil {
 		return err
 	}
 

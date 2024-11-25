@@ -805,11 +805,7 @@ func benchmarkConvert(b *testing.B, filename string) {
 		b.Fatal(err)
 	}
 	defer dst.Close()
-	c, err := convert.New(convert.Options{})
-	if err != nil {
-		b.Fatal(err)
-	}
-	err = c.Convert(dst, img, img.Size(), nil)
+	err = convert.Convert(dst, img, convert.Options{})
 	if err != nil {
 		b.Fatal(err)
 	}

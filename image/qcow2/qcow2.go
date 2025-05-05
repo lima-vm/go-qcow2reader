@@ -215,7 +215,7 @@ type Header struct {
 
 func (header *Header) Length() int {
 	if header.HeaderFieldsV3 != nil {
-		return int(header.HeaderFieldsV3.HeaderLength)
+		return int(header.HeaderLength)
 	}
 	return 72
 }
@@ -308,7 +308,7 @@ var (
 
 // Readable returns nil if the image is readable, otherwise returns an error.
 func (header *Header) Readable() error {
-	if string(header.HeaderFieldsV2.Magic[:]) != Magic {
+	if string(header.Magic[:]) != Magic {
 		return ErrNotQcow2
 	}
 	if header.Version < 2 {
@@ -351,10 +351,10 @@ func readHeader(r io.Reader) (*Header, error) {
 	if err := binary.Read(r, binary.BigEndian, &header.HeaderFieldsV2); err != nil {
 		return nil, fmt.Errorf("%w (%v)", ErrNotQcow2, err)
 	}
-	if string(header.HeaderFieldsV2.Magic[:]) != Magic {
+	if string(header.Magic[:]) != Magic {
 		return nil, fmt.Errorf("%w (the image lacks magic %q)", ErrNotQcow2, Magic)
 	}
-	switch header.HeaderFieldsV2.Version {
+	switch header.Version {
 	case 0, 1:
 		return nil, fmt.Errorf("%w (expected version >= 2, got %d)", ErrNotQcow2, header.HeaderFieldsV2)
 	case 2:
@@ -368,7 +368,7 @@ func readHeader(r io.Reader) (*Header, error) {
 	header.HeaderFieldsV3 = &v3
 
 	var additional HeaderFieldsAdditional
-	if header.HeaderFieldsV3.HeaderLength > 104 {
+	if header.HeaderLength > 104 {
 		if err := binary.Read(r, binary.BigEndian, &additional); err != nil {
 			return nil, err
 		}
@@ -567,7 +567,7 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 	img.errUnreadable = img.Header.Readable() // cache
 	if img.errUnreadable == nil {
 		// Load cluster size
-		img.clusterSize = 1 << img.Header.ClusterBits
+		img.clusterSize = 1 << img.ClusterBits
 
 		// Load header extensions
 		img.HeaderExtensions, err = readHeaderExtensions(ra, img.Header)
@@ -594,15 +594,15 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 		}
 
 		// Load L1 table
-		img.l1Table, err = readL1Table(ra, img.Header.L1TableOffset, img.Header.L1Size)
+		img.l1Table, err = readL1Table(ra, img.L1TableOffset, img.L1Size)
 		if err != nil {
 			return img, fmt.Errorf("failed to read L1 table: %w", err)
 		}
 
 		// Load decompressor
 		var compressionType CompressionType
-		if img.Header.HeaderFieldsAdditional != nil {
-			compressionType = img.Header.HeaderFieldsAdditional.CompressionType
+		if img.HeaderFieldsAdditional != nil {
+			compressionType = img.CompressionType
 		}
 		img.decompressor = decompressors[compressionType]
 		if img.decompressor == nil {
@@ -611,13 +611,13 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 		}
 
 		// Load backing file
-		if img.Header.BackingFileOffset != 0 {
-			if img.Header.BackingFileSize > 1023 {
-				img.errUnreadable = fmt.Errorf("expected backing file offset <= 1023, got %d", img.Header.BackingFileSize)
+		if img.BackingFileOffset != 0 {
+			if img.BackingFileSize > 1023 {
+				img.errUnreadable = fmt.Errorf("expected backing file offset <= 1023, got %d", img.BackingFileSize)
 				return img, nil
 			}
-			backingFileNameB := make([]byte, img.Header.BackingFileSize)
-			if _, err = ra.ReadAt(backingFileNameB, int64(img.Header.BackingFileOffset)); err != nil {
+			backingFileNameB := make([]byte, img.BackingFileSize)
+			if _, err = ra.ReadAt(backingFileNameB, int64(img.BackingFileOffset)); err != nil {
 				img.errUnreadable = fmt.Errorf("failed to read backing file name: %w", err)
 				return img, nil
 			}
@@ -691,7 +691,7 @@ func (img *Qcow2) Readable() error {
 }
 
 func (img *Qcow2) extendedL2() bool {
-	return img.Header.HeaderFieldsV3 != nil && img.Header.HeaderFieldsV3.IncompatibleFeatures&(1<<IncompatibleFeaturesExtendedL2EntriesBit) != 0
+	return img.HeaderFieldsV3 != nil && img.IncompatibleFeatures&(1<<IncompatibleFeaturesExtendedL2EntriesBit) != 0
 }
 
 func (img *Qcow2) getL2Table(l1Entry l1TableEntry) ([]l2TableEntry, error) {
@@ -920,18 +920,18 @@ func (img *Qcow2) readAtAlignedStandardExtendedL2(p []byte, off int64, desc stan
 }
 
 func (img *Qcow2) readAtAlignedCompressed(p []byte, off int64, desc compressedClusterDescriptor) (int, error) {
-	hostClusterOffset := desc.hostClusterOffset(int(img.Header.ClusterBits))
+	hostClusterOffset := desc.hostClusterOffset(int(img.ClusterBits))
 	if hostClusterOffset == 0 {
 		return 0, fmt.Errorf("invalid host cluster offset 0 for virtual offset %d", off)
 	}
-	additionalSectors := desc.additionalSectors(int(img.Header.ClusterBits))
+	additionalSectors := desc.additionalSectors(int(img.ClusterBits))
 	compressedSize := img.clusterSize + 512*additionalSectors
 	compressedSR := io.NewSectionReader(img.ra, int64(hostClusterOffset), int64(compressedSize))
 	zr, err := img.decompressor(compressedSR)
 	if err != nil {
 		return 0, fmt.Errorf("could not open the decompressor: %w", err)
 	}
-	defer zr.Close()
+	defer zr.Close() //nolint:errcheck
 	if discard := off % int64(img.clusterSize); discard != 0 {
 		if _, err := io.CopyN(io.Discard, zr, discard); err != nil {
 			return 0, err

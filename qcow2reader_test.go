@@ -33,12 +33,12 @@ func TestExtentsUnallocated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	img, err := qcow2reader.Open(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer img.Close()
+	defer img.Close() //nolint:errcheck
 
 	t.Run("entire image", func(t *testing.T) {
 		actual, err := img.Extent(0, img.Size())
@@ -142,7 +142,7 @@ func TestExtentsRaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	if err := f.Truncate(size); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestExtentsRaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer img.Close()
+	defer img.Close() //nolint:errcheck
 
 	t.Run("entire image", func(t *testing.T) {
 		actual, err := img.Extent(0, img.Size())
@@ -550,12 +550,12 @@ func listExtents(path string) ([]image.Extent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	img, err := qcow2reader.Open(f)
 	if err != nil {
 		return nil, err
 	}
-	defer img.Close()
+	defer img.Close() //nolint:errcheck
 
 	var extents []image.Extent
 	var start int64
@@ -767,12 +767,12 @@ func benchmarkRead(b *testing.B, filename string) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	img, err := qcow2reader.Open(f)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer img.Close()
+	defer img.Close() //nolint:errcheck
 	buf := make([]byte, 1*MiB)
 	reader := io.NewSectionReader(img, 0, img.Size())
 	n, err := io.CopyBuffer(Discard, reader, buf)
@@ -794,17 +794,17 @@ func benchmarkConvert(b *testing.B, filename string) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	img, err := qcow2reader.Open(f)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer img.Close()
+	defer img.Close() //nolint:errcheck
 	dst, err := os.Create(filename + ".out")
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer dst.Close()
+	defer dst.Close() //nolint:errcheck
 	err = convert.Convert(dst, img, convert.Options{})
 	if err != nil {
 		b.Fatal(err)
@@ -848,7 +848,7 @@ func createTestImage(filename string, size int64, utilization float64) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck
 	if err := file.Truncate(size); err != nil {
 		return err
 	}

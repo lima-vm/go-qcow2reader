@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/lima-vm/go-qcow2reader/image"
+	"github.com/lima-vm/go-qcow2reader/image/asif"
 	"github.com/lima-vm/go-qcow2reader/image/parallels"
 	"github.com/lima-vm/go-qcow2reader/image/qcow2"
 	"github.com/lima-vm/go-qcow2reader/image/raw"
@@ -23,6 +24,7 @@ var Types = []image.Type{
 	vdi.Type,
 	parallels.Type,
 	vpc.Type,
+	asif.Type,
 	raw.Type, // raw must be the last type
 }
 
@@ -58,6 +60,8 @@ func OpenWithType(ra io.ReaderAt, t image.Type) (image.Image, error) {
 		return parallels.Open(ra)
 	case vpc.Type:
 		return vpc.Open(ra)
+	case asif.Type:
+		return asif.Open(ra)
 	case raw.Type:
 		return raw.Open(ra)
 	default:

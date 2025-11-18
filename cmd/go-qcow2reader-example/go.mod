@@ -1,6 +1,6 @@
 module github.com/lima-vm/go-qcow2reader/cmd/go-qcow2reader-example
 
-go 1.22
+go 1.24
 
 require (
 	github.com/cheggaaa/pb/v3 v3.1.5

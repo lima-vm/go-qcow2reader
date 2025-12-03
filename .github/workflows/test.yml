@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9.1.0
+        uses: golangci/golangci-lint-action@v9.2.0
         with:
           args: --verbose
       - name: Install qemu-img as a test dependency

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"unsafe"
 
+	"github.com/lima-vm/go-qcow2reader/align"
 	"github.com/lima-vm/go-qcow2reader/image"
 )
 
@@ -54,6 +56,11 @@ type Options struct {
 
 	// If set, update progress during conversion.
 	Progress Updater
+
+	// Alignment in bytes for direct I/O. When set, the write buffer is aligned
+	// to this value and the last write is padded with zeros to the alignment
+	// boundary. Must be a power of 2, and BufferSize must be a multiple of it.
+	Alignment int
 }
 
 // Validate validates options and set default values. Returns an error for
@@ -84,6 +91,15 @@ func (o *Options) Validate() error {
 	// segment size.
 	if o.SegmentSize%int64(o.BufferSize) != 0 {
 		return errors.New("segment size not aligned to buffer size")
+	}
+
+	if o.Alignment > 0 {
+		if o.Alignment&(o.Alignment-1) != 0 {
+			return errors.New("alignment must be a power of 2")
+		}
+		if o.BufferSize%o.Alignment != 0 {
+			return errors.New("buffer size not aligned to alignment")
+		}
 	}
 
 	return nil
@@ -133,6 +149,20 @@ func (c *conversion) setError(err error) {
 	c.mutex.Unlock()
 }
 
+// allocateBuffer returns a buffer suitable for the conversion. When Alignment
+// is set, the buffer's starting address is aligned to opts.Alignment.
+func allocateBuffer(opts *Options) []byte {
+	if opts.Alignment == 0 {
+		return make([]byte, opts.BufferSize)
+	}
+	buf := make([]byte, opts.BufferSize+opts.Alignment)
+	remainder := int(uintptr(unsafe.Pointer(&buf[0])) % uintptr(opts.Alignment))
+	if remainder > 0 {
+		buf = buf[opts.Alignment-remainder:]
+	}
+	return buf[:opts.BufferSize]
+}
+
 // Convert copy image to io.WriterAt. Unallocated extents in the image or read
 // data which is all zeros are converted to unallocated byte range in the target
 // image. The target image must be new empty file or a file full of zeroes. To
@@ -159,7 +189,7 @@ func Convert(wa io.WriterAt, img image.Image, opts Options) error {
 			w := worker{
 				conv: &conv,
 				opts: &opts,
-				buf:  make([]byte, opts.BufferSize),
+				buf:  allocateBuffer(&opts),
 			}
 			if err := w.run(); err != nil {
 				conv.setError(err)
@@ -211,7 +241,9 @@ func (w *worker) zeroExtent(extent image.Extent) {
 }
 
 // copyExtent copies data from the image to the target writer. Ranges that read
-// as all zeros are skipped to keep the target sparse.
+// as all zeros are skipped to keep the target sparse. When direct I/O is
+// enabled, the last write of the image is padded with zeros to the alignment
+// boundary.
 func (w *worker) copyExtent(extent image.Extent) error {
 	for extent.Length > 0 {
 		n := len(w.buf)
@@ -233,10 +265,13 @@ func (w *worker) copyExtent(extent image.Extent) error {
 		}
 
 		if !bytes.Equal(w.buf[:nr], w.conv.zero[:nr]) {
-			if nw, err := w.conv.wa.WriteAt(w.buf[:nr], extent.Start); err != nil {
+			writeLen := w.ensureAlignment(nr, extent)
+			nw, err := w.conv.wa.WriteAt(w.buf[:writeLen], extent.Start)
+			if err != nil {
 				return err
-			} else if nw != nr {
-				return fmt.Errorf("read %d, but wrote %d bytes", nr, nw)
+			}
+			if nw != writeLen {
+				return fmt.Errorf("expected to write %d, but wrote %d bytes", writeLen, nw)
 			}
 		}
 
@@ -248,4 +283,18 @@ func (w *worker) copyExtent(extent image.Extent) error {
 		extent.Start += int64(nr)
 	}
 	return nil
+}
+
+// ensureAlignment returns the write length for nr bytes. When Alignment is set
+// and this is the last extent of the image, the write length is rounded up to
+// the alignment boundary and the padding bytes are zeroed.
+func (w *worker) ensureAlignment(nr int, extent image.Extent) int {
+	if w.opts.Alignment > 0 && extent.Start+extent.Length == w.conv.size && nr%w.opts.Alignment != 0 {
+		alignedLen := align.Up(nr, w.opts.Alignment)
+		for i := nr; i < alignedLen; i++ {
+			w.buf[i] = 0
+		}
+		return alignedLen
+	}
+	return nr
 }

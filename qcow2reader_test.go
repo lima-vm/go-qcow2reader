@@ -15,12 +15,10 @@ import (
 	"github.com/lima-vm/go-qcow2reader/image"
 	"github.com/lima-vm/go-qcow2reader/test/qemuimg"
 	"github.com/lima-vm/go-qcow2reader/test/qemuio"
+	. "github.com/lima-vm/go-qcow2reader/test/units" //nolint:staticcheck
 )
 
 const (
-	KiB         = int64(1) << 10
-	MiB         = int64(1) << 20
-	GiB         = int64(1) << 30
 	clusterSize = 64 * KiB
 )
 

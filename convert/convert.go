@@ -93,6 +93,9 @@ type conversion struct {
 	// Read only.
 	size        int64
 	segmentSize int64
+	zero        []byte
+	wa          io.WriterAt
+	img         image.Image
 
 	// Modified during Convert, protected by the mutex.
 	mutex  sync.Mutex
@@ -140,86 +143,109 @@ func Convert(wa io.WriterAt, img image.Image, opts Options) error {
 	if err := opts.Validate(); err != nil {
 		return err
 	}
-	c := conversion{size: img.Size(), segmentSize: opts.SegmentSize}
-	zero := make([]byte, opts.BufferSize)
+	conv := conversion{
+		size:        img.Size(),
+		segmentSize: opts.SegmentSize,
+		zero:        make([]byte, opts.BufferSize),
+		wa:          wa,
+		img:         img,
+	}
 	var wg sync.WaitGroup
 
 	for i := 0; i < opts.Workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			buf := make([]byte, opts.BufferSize)
-			for {
-				// Get next segment to copy.
-				start, end, stop := c.nextSegment()
-				if stop {
-					return
-				}
-
-				for start < end {
-					// Get next extent in this segment.
-					extent, err := img.Extent(start, end-start)
-					if err != nil {
-						c.setError(err)
-						return
-					}
-					if extent.Zero {
-						start += extent.Length
-						if opts.Progress != nil {
-							opts.Progress.Update(extent.Length)
-						}
-						continue
-					}
-
-					// Consume data from this extent.
-					for extent.Length > 0 {
-						// The last read may be shorter.
-						n := len(buf)
-						if extent.Length < int64(len(buf)) {
-							n = int(extent.Length)
-						}
-
-						// Read more data.
-						nr, err := img.ReadAt(buf[:n], start)
-						if err != nil {
-							if !errors.Is(err, io.EOF) {
-								c.setError(err)
-								return
-							}
-
-							// EOF for the last read of the last segment is expected, but since we
-							// read exactly size bytes, we should never get a zero read.
-							if nr == 0 {
-								c.setError(errors.New("unexpected EOF"))
-								return
-							}
-						}
-
-						// If the data is all zeros we skip it to create a hole. Otherwise
-						// write the data.
-						if !bytes.Equal(buf[:nr], zero[:nr]) {
-							if nw, err := wa.WriteAt(buf[:nr], start); err != nil {
-								c.setError(err)
-								return
-							} else if nw != nr {
-								c.setError(fmt.Errorf("read %d, but wrote %d bytes", nr, nw))
-								return
-							}
-						}
-
-						if opts.Progress != nil {
-							opts.Progress.Update(int64(nr))
-						}
-
-						extent.Length -= int64(nr)
-						extent.Start += int64(nr)
-						start += int64(nr)
-					}
-				}
+			w := worker{
+				conv: &conv,
+				opts: &opts,
+				buf:  make([]byte, opts.BufferSize),
+			}
+			if err := w.run(); err != nil {
+				conv.setError(err)
 			}
 		}()
 	}
 
 	wg.Wait()
-	return c.err
+	return conv.err
+}
+
+type worker struct {
+	conv *conversion
+	opts *Options
+	buf  []byte
+}
+
+func (w *worker) run() error {
+	for {
+		start, end, stop := w.conv.nextSegment()
+		if stop {
+			return nil
+		}
+
+		for start < end {
+			extent, err := w.conv.img.Extent(start, end-start)
+			if err != nil {
+				return err
+			}
+
+			if extent.Zero {
+				w.zeroExtent(extent)
+			} else if err := w.copyExtent(extent); err != nil {
+				return err
+			}
+
+			start += extent.Length
+		}
+	}
+}
+
+// zeroExtent ensures that the extent is full of zeros in the target. Currently
+// a no-op since we assume a new sparse file, but should punch a hole in the
+// future.
+func (w *worker) zeroExtent(extent image.Extent) {
+	if w.opts.Progress != nil {
+		w.opts.Progress.Update(extent.Length)
+	}
+}
+
+// copyExtent copies data from the image to the target writer. Ranges that read
+// as all zeros are skipped to keep the target sparse.
+func (w *worker) copyExtent(extent image.Extent) error {
+	for extent.Length > 0 {
+		n := len(w.buf)
+		if extent.Length < int64(len(w.buf)) {
+			n = int(extent.Length)
+		}
+
+		nr, err := w.conv.img.ReadAt(w.buf[:n], extent.Start)
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return err
+			}
+
+			// EOF for the last read of the last segment is expected, but since we
+			// read exactly size bytes, we should never get a zero read.
+			if nr == 0 {
+				return errors.New("unexpected EOF")
+			}
+		}
+
+		if !bytes.Equal(w.buf[:nr], w.conv.zero[:nr]) {
+			if nw, err := w.conv.wa.WriteAt(w.buf[:nr], extent.Start); err != nil {
+				return err
+			} else if nw != nr {
+				return fmt.Errorf("read %d, but wrote %d bytes", nr, nw)
+			}
+		}
+
+		if w.opts.Progress != nil {
+			w.opts.Progress.Update(int64(nr))
+		}
+
+		extent.Length -= int64(nr)
+		extent.Start += int64(nr)
+	}
+	return nil
 }

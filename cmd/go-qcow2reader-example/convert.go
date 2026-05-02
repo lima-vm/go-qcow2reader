@@ -9,6 +9,7 @@ import (
 	"github.com/cheggaaa/pb/v3"
 	"github.com/lima-vm/go-qcow2reader"
 	"github.com/lima-vm/go-qcow2reader/convert"
+	"github.com/lima-vm/go-qcow2reader/directio"
 	"github.com/lima-vm/go-qcow2reader/log"
 )
 
@@ -19,6 +20,7 @@ func cmdConvert(args []string) error {
 
 		// Options
 		debug   bool
+		direct  bool
 		options convert.Options
 	)
 
@@ -28,6 +30,7 @@ func cmdConvert(args []string) error {
 		flag.PrintDefaults()
 	}
 	fs.BoolVar(&debug, "debug", false, "enable printing debug messages")
+	fs.BoolVar(&direct, "direct", false, "use direct I/O for writing")
 	fs.Int64Var(&options.SegmentSize, "segment-size", convert.SegmentSize, "worker segment size in bytes")
 	fs.IntVar(&options.BufferSize, "buffer-size", convert.BufferSize, "buffer size in bytes")
 	fs.IntVar(&options.Workers, "workers", convert.Workers, "number of workers")
@@ -63,7 +66,13 @@ func cmdConvert(args []string) error {
 	}
 	defer img.Close()
 
-	t, err := os.Create(target)
+	openFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if direct {
+		openFlags |= directio.Flag
+		options.Alignment = directio.DefaultAlignment
+	}
+
+	t, err := os.OpenFile(target, openFlags, 0644)
 	if err != nil {
 		return err
 	}

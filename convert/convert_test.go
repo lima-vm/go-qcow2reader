@@ -2,8 +2,15 @@ package convert
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"unsafe"
+
+	"github.com/lima-vm/go-qcow2reader"
+	"github.com/lima-vm/go-qcow2reader/test/qemuimg"
+	"github.com/lima-vm/go-qcow2reader/test/testimage"
+	. "github.com/lima-vm/go-qcow2reader/test/units" //nolint:staticcheck
 )
 
 func TestValidateAlignment(t *testing.T) {
@@ -70,4 +77,128 @@ func TestAllocateBufferAligned(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Benchmark completely empty sparse image (0% utilization). This is the best
+// case when we don't have to read any cluster from storage.
+func BenchmarkConvert0p(b *testing.B) {
+	const size = 256 * MiB
+	base := filepath.Join(b.TempDir(), "image")
+	if err := testimage.Create(base, size, 0.0); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("qcow2", func(b *testing.B) {
+		img := base + ".qcow2"
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkConvert(b, img, Options{})
+		}
+	})
+	b.Run("qcow2 zlib", func(b *testing.B) {
+		img := base + ".zlib.qcow2"
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkConvert(b, img, Options{})
+		}
+	})
+}
+
+// Benchmark sparse image with 50% utilization matching lima default image.
+func BenchmarkConvert50p(b *testing.B) {
+	const size = 256 * MiB
+	base := filepath.Join(b.TempDir(), "image")
+	if err := testimage.Create(base, size, 0.5); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("qcow2", func(b *testing.B) {
+		img := base + ".qcow2"
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkConvert(b, img, Options{})
+		}
+	})
+	b.Run("qcow2 zlib", func(b *testing.B) {
+		img := base + ".zlib.qcow2"
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkConvert(b, img, Options{})
+		}
+	})
+}
+
+// Benchmark fully allocated image. This is the worst case for both uncompressed
+// and compressed image when we must read all clusters from storage.
+func BenchmarkConvert100p(b *testing.B) {
+	const size = 256 * MiB
+	base := filepath.Join(b.TempDir(), "image")
+	if err := testimage.Create(base, size, 1.0); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("qcow2", func(b *testing.B) {
+		img := base + ".qcow2"
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkConvert(b, img, Options{})
+		}
+	})
+	b.Run("qcow2 zlib", func(b *testing.B) {
+		img := base + ".zlib.qcow2"
+		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
+			b.Fatal(err)
+		}
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkConvert(b, img, Options{})
+		}
+	})
+}
+
+func benchmarkConvert(b *testing.B, filename string, opts Options) {
+	b.StartTimer()
+
+	f, err := os.Open(filename)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer f.Close() //nolint:errcheck
+	img, err := qcow2reader.Open(f)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer img.Close() //nolint:errcheck
+	dst, err := os.Create(filename + ".out")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer dst.Close() //nolint:errcheck
+	if err := Convert(dst, img, opts); err != nil {
+		b.Fatal(err)
+	}
+	if err := dst.Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.StopTimer()
+}
+
+func resetBenchmark(b *testing.B, size int64) {
+	b.StopTimer()
+	b.ResetTimer()
+	b.SetBytes(size)
+	b.ReportAllocs()
 }

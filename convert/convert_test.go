@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/lima-vm/go-qcow2reader"
+	"github.com/lima-vm/go-qcow2reader/directio"
 	"github.com/lima-vm/go-qcow2reader/test/qemuimg"
 	"github.com/lima-vm/go-qcow2reader/test/testimage"
 	. "github.com/lima-vm/go-qcow2reader/test/units" //nolint:staticcheck
@@ -83,7 +84,7 @@ func TestAllocateBufferAligned(t *testing.T) {
 // Benchmark completely empty sparse image (0% utilization). This is the best
 // case when we don't have to read any cluster from storage.
 func BenchmarkConvert0p(b *testing.B) {
-	const size = 256 * MiB
+	const size = 2 * GiB
 	base := filepath.Join(tempDir(b), "image")
 	if err := testimage.Create(base, size, 0.0); err != nil {
 		b.Fatal(err)
@@ -93,26 +94,42 @@ func BenchmarkConvert0p(b *testing.B) {
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
-		resetBenchmark(b, size)
-		for i := 0; i < b.N; i++ {
-			benchmarkConvert(b, img, Options{})
-		}
+		b.Run("buffered", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{}, 0)
+			}
+		})
+		b.Run("direct", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{Alignment: directio.DefaultAlignment}, directio.Flag)
+			}
+		})
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
-		resetBenchmark(b, size)
-		for i := 0; i < b.N; i++ {
-			benchmarkConvert(b, img, Options{})
-		}
+		b.Run("buffered", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{}, 0)
+			}
+		})
+		b.Run("direct", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{Alignment: directio.DefaultAlignment}, directio.Flag)
+			}
+		})
 	})
 }
 
 // Benchmark sparse image with 50% utilization matching lima default image.
 func BenchmarkConvert50p(b *testing.B) {
-	const size = 256 * MiB
+	const size = 2 * GiB
 	base := filepath.Join(tempDir(b), "image")
 	if err := testimage.Create(base, size, 0.5); err != nil {
 		b.Fatal(err)
@@ -122,27 +139,43 @@ func BenchmarkConvert50p(b *testing.B) {
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
-		resetBenchmark(b, size)
-		for i := 0; i < b.N; i++ {
-			benchmarkConvert(b, img, Options{})
-		}
+		b.Run("buffered", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{}, 0)
+			}
+		})
+		b.Run("direct", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{Alignment: directio.DefaultAlignment}, directio.Flag)
+			}
+		})
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
-		resetBenchmark(b, size)
-		for i := 0; i < b.N; i++ {
-			benchmarkConvert(b, img, Options{})
-		}
+		b.Run("buffered", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{}, 0)
+			}
+		})
+		b.Run("direct", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{Alignment: directio.DefaultAlignment}, directio.Flag)
+			}
+		})
 	})
 }
 
 // Benchmark fully allocated image. This is the worst case for both uncompressed
 // and compressed image when we must read all clusters from storage.
 func BenchmarkConvert100p(b *testing.B) {
-	const size = 256 * MiB
+	const size = 2 * GiB
 	base := filepath.Join(tempDir(b), "image")
 	if err := testimage.Create(base, size, 1.0); err != nil {
 		b.Fatal(err)
@@ -152,24 +185,40 @@ func BenchmarkConvert100p(b *testing.B) {
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
-		resetBenchmark(b, size)
-		for i := 0; i < b.N; i++ {
-			benchmarkConvert(b, img, Options{})
-		}
+		b.Run("buffered", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{}, 0)
+			}
+		})
+		b.Run("direct", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{Alignment: directio.DefaultAlignment}, directio.Flag)
+			}
+		})
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
-		resetBenchmark(b, size)
-		for i := 0; i < b.N; i++ {
-			benchmarkConvert(b, img, Options{})
-		}
+		b.Run("buffered", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{}, 0)
+			}
+		})
+		b.Run("direct", func(b *testing.B) {
+			resetBenchmark(b, size)
+			for i := 0; i < b.N; i++ {
+				benchmarkConvert(b, img, Options{Alignment: directio.DefaultAlignment}, directio.Flag)
+			}
+		})
 	})
 }
 
-func benchmarkConvert(b *testing.B, filename string, opts Options) {
+func benchmarkConvert(b *testing.B, filename string, opts Options, openFlags int) {
 	b.StartTimer()
 
 	f, err := os.Open(filename)
@@ -182,7 +231,8 @@ func benchmarkConvert(b *testing.B, filename string, opts Options) {
 		b.Fatal(err)
 	}
 	defer img.Close() //nolint:errcheck
-	dst, err := os.Create(filename + ".out")
+	dstFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC | openFlags
+	dst, err := os.OpenFile(filename+".out", dstFlags, 0600)
 	if err != nil {
 		b.Fatal(err)
 	}

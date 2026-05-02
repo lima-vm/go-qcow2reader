@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"unsafe"
 
@@ -83,7 +84,7 @@ func TestAllocateBufferAligned(t *testing.T) {
 // case when we don't have to read any cluster from storage.
 func BenchmarkConvert0p(b *testing.B) {
 	const size = 256 * MiB
-	base := filepath.Join(b.TempDir(), "image")
+	base := filepath.Join(tempDir(b), "image")
 	if err := testimage.Create(base, size, 0.0); err != nil {
 		b.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func BenchmarkConvert0p(b *testing.B) {
 // Benchmark sparse image with 50% utilization matching lima default image.
 func BenchmarkConvert50p(b *testing.B) {
 	const size = 256 * MiB
-	base := filepath.Join(b.TempDir(), "image")
+	base := filepath.Join(tempDir(b), "image")
 	if err := testimage.Create(base, size, 0.5); err != nil {
 		b.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func BenchmarkConvert50p(b *testing.B) {
 // and compressed image when we must read all clusters from storage.
 func BenchmarkConvert100p(b *testing.B) {
 	const size = 256 * MiB
-	base := filepath.Join(b.TempDir(), "image")
+	base := filepath.Join(tempDir(b), "image")
 	if err := testimage.Create(base, size, 1.0); err != nil {
 		b.Fatal(err)
 	}
@@ -201,4 +202,19 @@ func resetBenchmark(b *testing.B, size int64) {
 	b.ResetTimer()
 	b.SetBytes(size)
 	b.ReportAllocs()
+}
+
+// tempDir creates a temporary directory suitable for direct I/O testing. On
+// Linux, /tmp is typically tmpfs which does not support O_DIRECT, so we use
+// /var/tmp instead. On other systems the standard temp directory should work.
+func tempDir(b *testing.B) string {
+	if runtime.GOOS != "linux" {
+		return b.TempDir()
+	}
+	dir, err := os.MkdirTemp("/var/tmp", "go-qcow2reader-"+b.Name()+"-")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }

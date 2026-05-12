@@ -237,6 +237,9 @@ func benchmarkConvert(b *testing.B, filename string, opts Options, openFlags int
 		b.Fatal(err)
 	}
 	defer dst.Close() //nolint:errcheck
+	if err := dst.Truncate(img.Size()); err != nil {
+		b.Fatal(err)
+	}
 	if err := Convert(dst, img, opts); err != nil {
 		b.Fatal(err)
 	}

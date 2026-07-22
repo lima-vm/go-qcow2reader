@@ -534,7 +534,9 @@ type Qcow2 struct {
 	ra                  io.ReaderAt
 	*Header             `json:"header"`
 	HeaderExtensions    []HeaderExtension `json:"header_extensions"`
+	SnapshotEntries     []Snapshot        `json:"snapshots,omitempty"`
 	errUnreadable       error
+	errSnapshots        error
 	clusterSize         int
 	l2Entries           int
 	l1Table             []l1TableEntry
@@ -583,6 +585,14 @@ func Open(ra io.ReaderAt, openWithType image.OpenWithType) (*Qcow2, error) {
 					break
 				}
 				img.BackingFileFormat = image.Type(backingFileFormat)
+			}
+		}
+
+		// Load snapshots
+		if img.NbSnapshots != 0 {
+			img.SnapshotEntries, img.errSnapshots = readSnapshots(ra, img.SnapshotsOffset, img.NbSnapshots)
+			if img.errSnapshots != nil {
+				log.Warnf("Failed to read snapshots: %v", img.errSnapshots)
 			}
 		}
 
@@ -688,6 +698,20 @@ func (img *Qcow2) Size() int64 {
 
 func (img *Qcow2) Readable() error {
 	return img.errUnreadable
+}
+
+// Snapshots implements [image.SnapshotReader].
+// The result lacks qcow2-specific information; use the SnapshotEntries
+// field of [Qcow2] to retrieve it.
+func (img *Qcow2) Snapshots() ([]image.Snapshot, error) {
+	if img.errSnapshots != nil {
+		return nil, img.errSnapshots
+	}
+	snapshots := make([]image.Snapshot, len(img.SnapshotEntries))
+	for i, s := range img.SnapshotEntries {
+		snapshots[i] = s.Snapshot
+	}
+	return snapshots, nil
 }
 
 func (img *Qcow2) extendedL2() bool {

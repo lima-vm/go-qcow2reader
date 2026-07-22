@@ -4,23 +4,19 @@ package qcow2reader_test
 import (
 	"fmt"
 	"io"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/lima-vm/go-qcow2reader"
-	"github.com/lima-vm/go-qcow2reader/convert"
 	"github.com/lima-vm/go-qcow2reader/image"
 	"github.com/lima-vm/go-qcow2reader/test/qemuimg"
-	"github.com/lima-vm/go-qcow2reader/test/qemuio"
+	"github.com/lima-vm/go-qcow2reader/test/testimage"
+	. "github.com/lima-vm/go-qcow2reader/test/units" //nolint:staticcheck
 )
 
 const (
-	KiB         = int64(1) << 10
-	MiB         = int64(1) << 20
-	GiB         = int64(1) << 30
 	clusterSize = 64 * KiB
 )
 
@@ -216,7 +212,7 @@ func TestExtentsSome(t *testing.T) {
 		{Start: 1016 * clusterSize, Length: 8984 * clusterSize, Zero: true},
 	}
 	qcow2 := filepath.Join(t.TempDir(), "image")
-	if err := createTestImageWithExtents(qcow2, qemuimg.FormatQcow2, extents, "", ""); err != nil {
+	if err := testimage.CreateWithExtents(qcow2, qemuimg.FormatQcow2, extents, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	t.Run("qcow2", func(t *testing.T) {
@@ -259,7 +255,7 @@ func TestExtentsPartial(t *testing.T) {
 	}
 
 	qcow2 := filepath.Join(t.TempDir(), "image")
-	if err := createTestImageWithExtents(qcow2, qemuimg.FormatQcow2, extents, "", ""); err != nil {
+	if err := testimage.CreateWithExtents(qcow2, qemuimg.FormatQcow2, extents, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	t.Run("qcow2", func(t *testing.T) {
@@ -304,7 +300,7 @@ func TestExtentsMerge(t *testing.T) {
 	}
 
 	qcow2 := filepath.Join(t.TempDir(), "image")
-	if err := createTestImageWithExtents(qcow2, qemuimg.FormatQcow2, extents, "", ""); err != nil {
+	if err := testimage.CreateWithExtents(qcow2, qemuimg.FormatQcow2, extents, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	t.Run("qcow2", func(t *testing.T) {
@@ -339,7 +335,7 @@ func TestExtentsZero(t *testing.T) {
 	}
 
 	qcow2 := filepath.Join(t.TempDir(), "image")
-	if err := createTestImageWithExtents(qcow2, qemuimg.FormatQcow2, extents, "", ""); err != nil {
+	if err := testimage.CreateWithExtents(qcow2, qemuimg.FormatQcow2, extents, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	t.Run("qcow2", func(t *testing.T) {
@@ -393,7 +389,7 @@ func TestExtentsBackingFile(t *testing.T) {
 		{Start: 999 * clusterSize, Length: 1 * clusterSize, Allocated: true},
 	}
 	baseRaw := filepath.Join(tmpDir, "base.raw")
-	if err := createTestImageWithExtents(baseRaw, qemuimg.FormatRaw, baseExtents, "", ""); err != nil {
+	if err := testimage.CreateWithExtents(baseRaw, qemuimg.FormatRaw, baseExtents, "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -404,7 +400,7 @@ func TestExtentsBackingFile(t *testing.T) {
 			t.Fatal(err)
 		}
 		top := filepath.Join(tmpDir, "top.qcow2")
-		if err := createTestImageWithExtents(top, qemuimg.FormatQcow2, topExtents, baseQcow2, qemuimg.FormatQcow2); err != nil {
+		if err := testimage.CreateWithExtents(top, qemuimg.FormatQcow2, topExtents, baseQcow2, qemuimg.FormatQcow2); err != nil {
 			t.Fatal(err)
 		}
 		// When top and base are uncompressed, extents from to and based are merged.
@@ -432,7 +428,7 @@ func TestExtentsBackingFile(t *testing.T) {
 			t.Fatal(err)
 		}
 		top := filepath.Join(tmpDir, "top.qcow2")
-		if err := createTestImageWithExtents(top, qemuimg.FormatQcow2, topExtents, baseQcow2Zlib, qemuimg.FormatQcow2); err != nil {
+		if err := testimage.CreateWithExtents(top, qemuimg.FormatQcow2, topExtents, baseQcow2Zlib, qemuimg.FormatQcow2); err != nil {
 			t.Fatal(err)
 		}
 		// When base is compressed, extents from to and based cannot be merged since
@@ -485,11 +481,11 @@ func TestExtentsBackingFileShort(t *testing.T) {
 	}
 	tmpDir := t.TempDir()
 	base := filepath.Join(tmpDir, "base.qcow2")
-	if err := createTestImageWithExtents(base, qemuimg.FormatQcow2, baseExtents, "", ""); err != nil {
+	if err := testimage.CreateWithExtents(base, qemuimg.FormatQcow2, baseExtents, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	top := filepath.Join(tmpDir, "top.qcow2")
-	if err := createTestImageWithExtents(top, qemuimg.FormatQcow2, topExtents, base, qemuimg.FormatQcow2); err != nil {
+	if err := testimage.CreateWithExtents(top, qemuimg.FormatQcow2, topExtents, base, qemuimg.FormatQcow2); err != nil {
 		t.Fatal(err)
 	}
 	actual, err := listExtents(top)
@@ -518,11 +514,11 @@ func TestExtentsBackingFileShortUnaligned(t *testing.T) {
 	}
 	tmpDir := t.TempDir()
 	base := filepath.Join(tmpDir, "base.raw")
-	if err := createTestImageWithExtents(base, qemuimg.FormatRaw, baseExtents, "", ""); err != nil {
+	if err := testimage.CreateWithExtents(base, qemuimg.FormatRaw, baseExtents, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	top := filepath.Join(tmpDir, "top.qcow2")
-	if err := createTestImageWithExtents(top, qemuimg.FormatQcow2, topExtents, base, qemuimg.FormatRaw); err != nil {
+	if err := testimage.CreateWithExtents(top, qemuimg.FormatQcow2, topExtents, base, qemuimg.FormatRaw); err != nil {
 		t.Fatal(err)
 	}
 	actual, err := listExtents(top)
@@ -578,186 +574,93 @@ func listExtents(path string) ([]image.Extent, error) {
 	return extents, nil
 }
 
-// createTestImageWithExtents creates a n image with the allocation described
-// by extents.
-func createTestImageWithExtents(
-	path string,
-	format qemuimg.Format,
-	extents []image.Extent,
-	backingFile string,
-	backingFormat qemuimg.Format,
-) error {
-	lastExtent := extents[len(extents)-1]
-	size := lastExtent.Start + lastExtent.Length
-	if err := qemuimg.Create(path, format, size, backingFile, backingFormat); err != nil {
-		return err
-	}
-	for _, extent := range extents {
-		if !extent.Allocated {
-			continue
-		}
-		start := extent.Start
-		length := extent.Length
-		for length > 0 {
-			// qemu-io requires length < 2g.
-			n := length
-			if n >= 2*GiB {
-				n = 2*GiB - 64*KiB
-			}
-			if extent.Zero {
-				if err := qemuio.Zero(path, format, start, n); err != nil {
-					return err
-				}
-			} else {
-				if err := qemuio.Write(path, format, start, n, 0x55); err != nil {
-					return err
-				}
-			}
-			start += n
-			length -= n
-		}
-	}
-	return nil
-}
-
-// Benchmark completely empty sparse image (0% utilization).  This is the best
+// Benchmark completely empty sparse image (0% utilization). This is the best
 // case when we don't have to read any cluster from storage.
-func Benchmark0p(b *testing.B) {
+func BenchmarkRead0p(b *testing.B) {
 	const size = 256 * MiB
 	base := filepath.Join(b.TempDir(), "image")
-	if err := createTestImage(base, size, 0.0); err != nil {
+	if err := testimage.Create(base, size, 0.0); err != nil {
 		b.Fatal(err)
 	}
 	b.Run("qcow2", func(b *testing.B) {
-		img := base + ".qocw2"
+		img := base + ".qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
-		b.Run("read", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkRead(b, img)
-			}
-		})
-		b.Run("convert", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkConvert(b, img)
-			}
-		})
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
-		b.Run("read", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkRead(b, img)
-			}
-		})
-		b.Run("read", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkConvert(b, img)
-			}
-		})
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
 	})
-	// TODO: qcow2 zstd (not supported yet)
 }
 
 // Benchmark sparse image with 50% utilization matching lima default image.
-func Benchmark50p(b *testing.B) {
+func BenchmarkRead50p(b *testing.B) {
 	const size = 256 * MiB
 	base := filepath.Join(b.TempDir(), "image")
-	if err := createTestImage(base, size, 0.5); err != nil {
+	if err := testimage.Create(base, size, 0.5); err != nil {
 		b.Fatal(err)
 	}
 	b.Run("qcow2", func(b *testing.B) {
-		img := base + ".qocw2"
+		img := base + ".qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
-		b.Run("read", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkRead(b, img)
-			}
-		})
-		b.Run("convert", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkConvert(b, img)
-			}
-		})
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
-		b.Run("read", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkRead(b, img)
-			}
-		})
-		b.Run("convert", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkConvert(b, img)
-			}
-		})
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
 	})
-	// TODO: qcow2 zstd (not supported yet)
 }
 
 // Benchmark fully allocated image. This is the worst case for both uncompressed
 // and compressed image when we must read all clusters from storage.
-func Benchmark100p(b *testing.B) {
+func BenchmarkRead100p(b *testing.B) {
 	const size = 256 * MiB
 	base := filepath.Join(b.TempDir(), "image")
-	if err := createTestImage(base, size, 1.0); err != nil {
+	if err := testimage.Create(base, size, 1.0); err != nil {
 		b.Fatal(err)
 	}
 	b.Run("qcow2", func(b *testing.B) {
-		img := base + ".qocw2"
+		img := base + ".qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionNone); err != nil {
 			b.Fatal(err)
 		}
-		b.Run("read", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkRead(b, img)
-			}
-		})
-		b.Run("convert", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkConvert(b, img)
-			}
-		})
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
 	})
 	b.Run("qcow2 zlib", func(b *testing.B) {
 		img := base + ".zlib.qcow2"
 		if err := qemuimg.Convert(base, img, qemuimg.FormatQcow2, qemuimg.CompressionZlib); err != nil {
 			b.Fatal(err)
 		}
-		b.Run("read", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkRead(b, img)
-			}
-		})
-		b.Run("convert", func(b *testing.B) {
-			resetBenchmark(b, size)
-			for i := 0; i < b.N; i++ {
-				benchmarkConvert(b, img)
-			}
-		})
+		resetBenchmark(b, size)
+		for i := 0; i < b.N; i++ {
+			benchmarkRead(b, img)
+		}
 	})
-	// TODO: qcow2 zstd (not supported yet)
 }
 
 func benchmarkRead(b *testing.B, filename string) {
@@ -787,35 +690,6 @@ func benchmarkRead(b *testing.B, filename string) {
 	}
 }
 
-func benchmarkConvert(b *testing.B, filename string) {
-	b.StartTimer()
-
-	f, err := os.Open(filename)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer f.Close() //nolint:errcheck
-	img, err := qcow2reader.Open(f)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer img.Close() //nolint:errcheck
-	dst, err := os.Create(filename + ".out")
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer dst.Close() //nolint:errcheck
-	err = convert.Convert(dst, img, convert.Options{})
-	if err != nil {
-		b.Fatal(err)
-	}
-	if err := dst.Close(); err != nil {
-		b.Fatal(err)
-	}
-
-	b.StopTimer()
-}
-
 // We cannot use io.Discard since it implements ReadFrom using small buffers
 // size (8192), confusing our test results. Reads smaller than cluster size (64
 // KiB) are extremely inefficient with compressed clusters.
@@ -832,53 +706,4 @@ func resetBenchmark(b *testing.B, size int64) {
 	b.ResetTimer()
 	b.SetBytes(size)
 	b.ReportAllocs()
-}
-
-// createTestImage creates raw image with fake data that compresses like real
-// image data. Utilization deterimines the amount of data to allocate (0.0--1.0).
-func createTestImage(filename string, size int64, utilization float64) error {
-	if utilization < 0 || utilization > 1 {
-		return fmt.Errorf("utilization out of range (0.0-1.0): %f", utilization)
-	}
-
-	const chunkSize = 8 * MiB
-	dataSize := int64(float64(chunkSize) * utilization)
-
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close() //nolint:errcheck
-	if err := file.Truncate(size); err != nil {
-		return err
-	}
-	if dataSize > 0 {
-		reader := &Generator{}
-		for offset := int64(0); offset < size; offset += chunkSize {
-			_, err := file.Seek(offset, io.SeekStart)
-			if err != nil {
-				return err
-			}
-			chunk := io.LimitReader(reader, dataSize)
-			if n, err := io.Copy(file, chunk); err != nil {
-				return err
-			} else if n != dataSize {
-				return fmt.Errorf("expected %d bytes, wrote %d bytes", dataSize, n)
-			}
-		}
-	}
-	return file.Close()
-}
-
-// Generator generates fake data that compresses like a real image data (30%).
-type Generator struct{}
-
-func (g *Generator) Read(b []byte) (int, error) {
-	for i := 0; i < len(b); i++ {
-		b[i] = byte(i & 0xff)
-	}
-	rand.Shuffle(len(b)/8*5, func(i, j int) {
-		b[i], b[j] = b[j], b[i]
-	})
-	return len(b), nil
 }

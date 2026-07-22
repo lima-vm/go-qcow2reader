@@ -9,6 +9,7 @@ name_qcow2="$1"
 name_raw_a="${name_qcow2}.raw_a"
 name_raw_b="${name_qcow2}.raw_b"
 name_raw_c="${name_qcow2}.raw_c"
+name_raw_d="${name_qcow2}.raw_d"
 
 echo "Input file: ${name_qcow2}"
 set -x
@@ -43,6 +44,13 @@ go-qcow2reader-example convert "${name_qcow2}" "${name_raw_c}"
 sha256sum "${name_raw_c}" | tee "${name_raw_c}.sha256"
 set +x
 
+rm -f "${name_raw_d}" "${name_raw_d}.sha256"
+echo "Converting ${name_qcow2} to ${name_raw_d} with go-qcow2reader convert -direct"
+set -x
+go-qcow2reader-example convert -direct "${name_qcow2}" "${name_raw_d}"
+sha256sum "${name_raw_d}" | tee "${name_raw_d}.sha256"
+set +x
+
 expected="$(cut -d " " -f 1 <"${name_raw_a}.sha256")"
 
 got="$(cut -d " " -f 1 <"${name_raw_b}.sha256")"
@@ -67,6 +75,17 @@ else
 	exit 1
 fi
 
+got="$(cut -d " " -f 1 <"${name_raw_d}.sha256")"
+echo "Comparing: ${expected} vs ${got}"
+if [ "${expected}" = "${got}" ]; then
+	echo "OK"
+else
+	echo "FAIL"
+	set -x
+	qemu-img compare "${name_raw_a}" "${name_raw_d}"
+	exit 1
+fi
+
 echo "===== Phase 2: random read ====="
 for offset in 1 22 333 4444 55555 666666 7777777 88888888; do
 	for length in 1 22 333 4444 55555 666666 7777777 88888888; do
@@ -88,5 +107,5 @@ done
 
 echo "===== Cleaning up... ====="
 set -x
-rm -f "${name_raw_b}" "${name_raw_b}.sha256" "${name_raw_c}" "${name_raw_c}.sha256"
+rm -f "${name_raw_b}" "${name_raw_b}.sha256" "${name_raw_c}" "${name_raw_c}.sha256" "${name_raw_d}" "${name_raw_d}.sha256"
 set +x

@@ -43,6 +43,7 @@ Available commands:
   read		read image data and print to stdout
   convert	convert image to raw format
   map		print image extents
+  snapshot	list internal snapshots
 `
 	fmt.Fprintf(os.Stderr, usage, os.Args[0])
 	os.Exit(1)
@@ -74,6 +75,8 @@ func main() {
 		err = cmdConvert(args)
 	case "map":
 		err = cmdMap(args)
+	case "snapshot":
+		err = cmdSnapshot(args)
 	default:
 		usage()
 	}

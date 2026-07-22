@@ -48,6 +48,16 @@ jobs:
           qemu-img convert -f qcow2 -O qcow2 -o compression_type=zstd debian-11-genericcloud-amd64-20230501-1367.qcow2 debian-11-genericcloud-amd64-20230501-1367.zstd.qcow2
           # Convert to ext_l2
           qemu-img convert -f qcow2 -O qcow2 -o extended_l2=on debian-11-genericcloud-amd64-20230501-1367.qcow2 debian-11-genericcloud-amd64-20230501-1367.ext_l2.qcow2
+          # Create an image with internal snapshots.
+          # Write different data before, between, and after the snapshots, so
+          # that every snapshot captures a distinct disk state and the writes
+          # after a snapshot exercise copy-on-write in the active layer.
+          cp debian-11-genericcloud-amd64-20230501-1367.qcow2 debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2
+          qemu-io -f qcow2 -c "write -P 0xaa 0 8M" debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2
+          qemu-img snapshot -c snap1 debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2
+          qemu-io -f qcow2 -c "write -P 0xbb 4M 8M" debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2
+          qemu-img snapshot -c "second snapshot" debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2
+          qemu-io -f qcow2 -c "write -P 0xcc 1G 16M" debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2
       - name: Prepare test-images
         run: cp -a test-images-ro test-images
       - name: "Test debian-11-genericcloud-amd64-20230501-1367.qcow2"
@@ -58,6 +68,10 @@ jobs:
         run: hack/compare-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.zstd.qcow2
       - name: "Test debian-11-genericcloud-amd64-20230501-1367.ext_l2.qcow2"
         run: hack/compare-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.ext_l2.qcow2
+      - name: "Test debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2 (internal snapshots)"
+        run: |
+          hack/compare-snapshots-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2
+          hack/compare-with-qemu-img.sh test-images/debian-11-genericcloud-amd64-20230501-1367.snapshot.qcow2
 
   macos-unit-tests:
     runs-on: macos-latest

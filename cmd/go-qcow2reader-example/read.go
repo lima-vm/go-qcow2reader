@@ -26,7 +26,7 @@ func cmdRead(args []string) error {
 	fs := flag.NewFlagSet("read", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: %s read [OPTIONS...] FILE\n", os.Args[0])
-		flag.PrintDefaults()
+		fs.PrintDefaults()
 	}
 	fs.BoolVar(&debug, "debug", false, "enable printing debug messages")
 	fs.IntVar(&bufferSize, "buffer-size", 2*1024*1024, "buffer size")

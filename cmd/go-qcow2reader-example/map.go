@@ -24,7 +24,7 @@ func cmdMap(args []string) error {
 	fs := flag.NewFlagSet("map", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: %s map [OPTIONS...] FILE\n", os.Args[0])
-		flag.PrintDefaults()
+		fs.PrintDefaults()
 	}
 	fs.BoolVar(&debug, "debug", false, "enable printing debug messages")
 	if err := fs.Parse(args); err != nil {

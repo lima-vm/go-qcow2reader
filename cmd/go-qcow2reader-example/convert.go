@@ -4,11 +4,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/cheggaaa/pb/v3"
 	"github.com/lima-vm/go-qcow2reader"
 	"github.com/lima-vm/go-qcow2reader/convert"
+	"github.com/lima-vm/go-qcow2reader/image"
+	"github.com/lima-vm/go-qcow2reader/image/raw"
+	"github.com/lima-vm/go-qcow2reader/image/vhdx"
 	"github.com/lima-vm/go-qcow2reader/log"
 )
 
@@ -18,8 +22,10 @@ func cmdConvert(args []string) error {
 		source, target string
 
 		// Options
-		debug   bool
-		options convert.Options
+		debug        bool
+		outputFormat string
+		blockSize    int64
+		options      convert.Options
 	)
 
 	fs := flag.NewFlagSet("convert", flag.ExitOnError)
@@ -28,6 +34,8 @@ func cmdConvert(args []string) error {
 		flag.PrintDefaults()
 	}
 	fs.BoolVar(&debug, "debug", false, "enable printing debug messages")
+	fs.StringVar(&outputFormat, "O", string(raw.Type), "output format (raw or vhdx)")
+	fs.Int64Var(&blockSize, "block-size", 0, "vhdx block size in bytes (0 = auto)")
 	fs.Int64Var(&options.SegmentSize, "segment-size", convert.SegmentSize, "worker segment size in bytes")
 	fs.IntVar(&options.BufferSize, "buffer-size", convert.BufferSize, "buffer size in bytes")
 	fs.IntVar(&options.Workers, "workers", convert.Workers, "number of workers")
@@ -69,8 +77,24 @@ func cmdConvert(args []string) error {
 	}
 	defer t.Close()
 
-	if err := t.Truncate(img.Size()); err != nil {
-		return err
+	var (
+		wa     io.WriterAt = t
+		finish func() error
+	)
+	switch image.Type(outputFormat) {
+	case raw.Type:
+		if err := t.Truncate(img.Size()); err != nil {
+			return err
+		}
+	case vhdx.Type:
+		w, err := vhdx.NewWriter(t, img.Size(), vhdx.WriterOptions{BlockSize: blockSize})
+		if err != nil {
+			return err
+		}
+		wa = w
+		finish = w.Close
+	default:
+		return fmt.Errorf("unsupported output format %q", outputFormat)
 	}
 
 	bar := newProgressBar(img.Size())
@@ -78,8 +102,14 @@ func cmdConvert(args []string) error {
 	defer bar.Finish()
 	options.Progress = bar
 
-	if err := convert.Convert(t, img, options); err != nil {
+	if err := convert.Convert(wa, img, options); err != nil {
 		return err
+	}
+
+	if finish != nil {
+		if err := finish(); err != nil {
+			return err
+		}
 	}
 
 	if err := t.Sync(); err != nil {

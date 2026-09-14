@@ -41,7 +41,7 @@ func usage() {
 Available commands:
   info		show image information
   read		read image data and print to stdout
-  convert	convert image to raw format
+  convert	convert image to raw or vhdx format
   map		print image extents
 `
 	fmt.Fprintf(os.Stderr, usage, os.Args[0])

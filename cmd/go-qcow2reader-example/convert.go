@@ -4,11 +4,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/cheggaaa/pb/v3"
 	"github.com/lima-vm/go-qcow2reader"
 	"github.com/lima-vm/go-qcow2reader/convert"
+	"github.com/lima-vm/go-qcow2reader/image"
+	"github.com/lima-vm/go-qcow2reader/image/raw"
+	"github.com/lima-vm/go-qcow2reader/image/vhdx"
 	"github.com/lima-vm/go-qcow2reader/log"
 )
 
@@ -18,16 +22,20 @@ func cmdConvert(args []string) error {
 		source, target string
 
 		// Options
-		debug   bool
-		options convert.Options
+		debug        bool
+		outputFormat string
+		blockSize    int64
+		options      convert.Options
 	)
 
 	fs := flag.NewFlagSet("convert", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s convert [OPTIONS...] SOURCE TARGET\n", os.Args[0])
-		flag.PrintDefaults()
+		fmt.Fprintf(fs.Output(), "Usage: %s convert [OPTIONS...] SOURCE TARGET\n", os.Args[0])
+		fs.PrintDefaults()
 	}
 	fs.BoolVar(&debug, "debug", false, "enable printing debug messages")
+	fs.StringVar(&outputFormat, "O", string(raw.Type), "output format (raw or vhdx)")
+	fs.Int64Var(&blockSize, "block-size", 0, "vhdx block size in bytes (0 = auto)")
 	fs.Int64Var(&options.SegmentSize, "segment-size", convert.SegmentSize, "worker segment size in bytes")
 	fs.IntVar(&options.BufferSize, "buffer-size", convert.BufferSize, "buffer size in bytes")
 	fs.IntVar(&options.Workers, "workers", convert.Workers, "number of workers")
@@ -63,14 +71,66 @@ func cmdConvert(args []string) error {
 	}
 	defer img.Close()
 
-	t, err := os.Create(target)
+	// Validate the options before creating the target, so that an invalid option
+	// does not truncate an existing file.
+	if err := options.Validate(); err != nil {
+		return err
+	}
+	outputType := image.Type(outputFormat)
+	writerOptions := vhdx.WriterOptions{BlockSize: blockSize}
+	switch outputType {
+	case raw.Type:
+		if blockSize != 0 {
+			return fmt.Errorf("-block-size is supported only for output format %q", vhdx.Type)
+		}
+	case vhdx.Type:
+		if err := writerOptions.Validate(img.Size()); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported output format %q", outputFormat)
+	}
+
+	// Open the target without truncating it, so that a target which turns out to
+	// be the source is not destroyed before the check below.
+	t, err := os.OpenFile(target, os.O_RDWR|os.O_CREATE, 0o666)
 	if err != nil {
 		return err
 	}
 	defer t.Close()
 
-	if err := t.Truncate(img.Size()); err != nil {
+	sourceStat, err := f.Stat()
+	if err != nil {
 		return err
+	}
+	targetStat, err := t.Stat()
+	if err != nil {
+		return err
+	}
+	if os.SameFile(sourceStat, targetStat) {
+		return errors.New("target is the source file")
+	}
+
+	if err := t.Truncate(0); err != nil {
+		return err
+	}
+
+	var (
+		wa     io.WriterAt = t
+		finish func() error
+	)
+	switch outputType {
+	case raw.Type:
+		if err := t.Truncate(img.Size()); err != nil {
+			return err
+		}
+	case vhdx.Type:
+		w, err := vhdx.NewWriter(t, img.Size(), writerOptions)
+		if err != nil {
+			return err
+		}
+		wa = w
+		finish = w.Close
 	}
 
 	bar := newProgressBar(img.Size())
@@ -78,8 +138,14 @@ func cmdConvert(args []string) error {
 	defer bar.Finish()
 	options.Progress = bar
 
-	if err := convert.Convert(t, img, options); err != nil {
+	if err := convert.Convert(wa, img, options); err != nil {
 		return err
+	}
+
+	if finish != nil {
+		if err := finish(); err != nil {
+			return err
+		}
 	}
 
 	if err := t.Sync(); err != nil {

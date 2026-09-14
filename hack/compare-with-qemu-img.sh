@@ -86,7 +86,18 @@ for offset in 1 22 333 4444 55555 666666 7777777 88888888; do
 	done
 done
 
+echo "===== Phase 3: convert to vhdx ====="
+name_vhdx="${name_qcow2}.vhdx"
+rm -f "${name_vhdx}"
+echo "Converting ${name_qcow2} to ${name_vhdx} with go-qcow2reader convert"
+set -x
+go-qcow2reader-example convert -O vhdx "${name_qcow2}" "${name_vhdx}"
+qemu-img info "${name_vhdx}"
+qemu-img compare -f raw "${name_raw_a}" -F vhdx "${name_vhdx}"
+set +x
+echo "OK"
+
 echo "===== Cleaning up... ====="
 set -x
-rm -f "${name_raw_b}" "${name_raw_b}.sha256" "${name_raw_c}" "${name_raw_c}.sha256"
+rm -f "${name_raw_b}" "${name_raw_b}.sha256" "${name_raw_c}" "${name_raw_c}.sha256" "${name_vhdx}"
 set +x

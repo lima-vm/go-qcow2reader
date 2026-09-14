@@ -3,6 +3,7 @@ package image
 import (
 	"errors"
 	"io"
+	"time"
 )
 
 // Type must be a "Backing file format name string" that appears in QCOW2.
@@ -23,6 +24,24 @@ type Extent struct {
 	Zero bool `json:"zero"`
 	// Set if this extent is compressed.
 	Compressed bool `json:"compressed"`
+}
+
+// Snapshot describes an internal snapshot stored in the image.
+type Snapshot struct {
+	// ID is the unique ID of the snapshot.
+	ID string `json:"id"`
+	// Name is the human-readable name of the snapshot.
+	Name string `json:"name"`
+	// CreatedAt is the time at which the snapshot was taken.
+	// Nil if unknown.
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+}
+
+// SnapshotReader is optionally implemented by an [Image] that supports
+// reading internal snapshots.
+type SnapshotReader interface {
+	// Snapshots returns the internal snapshots stored in the image.
+	Snapshots() ([]Snapshot, error)
 }
 
 // Image implements [io.ReaderAt] and [io.Closer].

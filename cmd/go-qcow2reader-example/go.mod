@@ -4,7 +4,7 @@ go 1.24
 
 require (
 	github.com/cheggaaa/pb/v3 v3.1.5
-	github.com/klauspost/compress v1.16.5
+	github.com/klauspost/compress v1.18.7
 	github.com/lima-vm/go-qcow2reader v0.0.0-00010101000000-000000000000
 )
 
